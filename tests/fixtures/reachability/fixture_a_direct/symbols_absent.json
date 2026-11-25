@@ -1,0 +1,22 @@
+{
+  "manifest_version": "1.0",
+  "entries": [
+    {
+      "vulnerability_id": "CVE-2024-0000",
+      "package": {
+        "ecosystem": "pypi",
+        "name": "PyYAML",
+        "import_names": ["yaml"]
+      },
+      "symbols": [
+        {
+          "module": "yaml",
+          "qualified_name": "yaml.nonexistent_api",
+          "symbol_type": "function",
+          "source": "maintainer_vex",
+          "confidence": "high"
+        }
+      ]
+    }
+  ]
+}

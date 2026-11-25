@@ -1,0 +1,29 @@
+{
+  "manifest_version": "1.0",
+  "entries": [
+    {
+      "vulnerability_id": "CVE-2024-9999",
+      "package": {
+        "ecosystem": "pypi",
+        "name": "demo-dep",
+        "import_names": ["dep"]
+      },
+      "symbols": [
+        {
+          "module": "dep",
+          "qualified_name": "dep.safe_unused",
+          "symbol_type": "function",
+          "source": "curated_advisory_analysis",
+          "confidence": "verified"
+        },
+        {
+          "module": "dep",
+          "qualified_name": "dep.dangerous_call",
+          "symbol_type": "function",
+          "source": "curated_advisory_analysis",
+          "confidence": "verified"
+        }
+      ]
+    }
+  ]
+}

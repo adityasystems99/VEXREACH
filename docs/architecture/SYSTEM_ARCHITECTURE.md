@@ -85,14 +85,19 @@ flowchart TD
 
 ## 4. The Eight Logical Engines
 
-### Engine 1: Discovery Engine
-- **Purpose**: Ingest target repositories, container images, and software packages.
-- **Components**:
-  - Ingestion adapter for Trivy (container & filesystem vulnerability scanning).
-  - Parser for CycloneDX (1.4, 1.5) and SPDX (2.3) SBOM formats.
-  - Package URL (purl) normalizer across PyPI, Go Modules, NPM, and Debian/Alpine.
-  - Vulnerability metadata synchronizer connecting to OSV (Open Source Vulnerabilities), NVD (National Vulnerability Database), and CISA Known Exploited Vulnerabilities (KEV).
-- **Guarantees**: Produces normalized, deduplicated package dependency trees with associated vulnerability identifiers.
+### Engine 1: Discovery & Vulnerability Intelligence (Phases 3–4 — Implemented for Local Filesystem, CycloneDX & OSV.dev)
+- **Purpose**: Ingest target repositories safely without executing code, discover dependencies/vulnerabilities, and enrich findings with authoritative OSV.dev intelligence.
+- **Implemented Components**:
+  - `TargetValidator` (`packages/core/engines/discovery/target_validator.py`): Path, permission, symlink, and manifest hint verification.
+  - `TrivyClient` & `TrivyReportParser` (`packages/core/integrations/trivy/`): Safe subprocess execution (`shell=False`, timeouts, bounded output, strict JSON checks) and isolated Trivy JSON parsing.
+  - `CycloneDXParser` (`packages/core/integrations/cyclonedx/`): CycloneDX 1.4/1.5/1.6 SBOM parsing, direct/transitive dependency scope extraction, and completeness classification (`complete`, `incomplete`, `failed`).
+  - `DiscoveryNormalizer` & `DiscoveryOrchestrator` (`packages/core/engines/discovery/`): PURL, severity, and CVSS normalization into canonical `DiscoveryResult` records with partial-failure preservation.
+  - `OSVClient`, schemas & mapper (`packages/core/integrations/osv/`): OSV.dev v1 API integration (`/v1/query`, `/v1/querybatch` with pagination, `/v1/vulns/{id}`), bounded HTTP streaming, retries, and response validation.
+  - `IntelligenceOrchestrator`, `VulnerabilityCorrelator`, `VersionRangeEvaluator` (`packages/core/engines/intelligence/`): Conservative ID/alias/package correlation, conflict preservation, and PEP 440 / SemVer 2.0.0 range evaluation.
+  - `EvidenceStore` & `SQLiteAdvisoryCache` (`packages/core/storage/`): Persists raw Trivy, CycloneDX, and OSV payloads with SHA-256 `provenance.json`, plus local TTL/modified-aware SQLite advisory caching.
+- **Planned Extensions**:
+  - Container image scanning (`trivy image`), SPDX 2.3 ingestion, and NVD / CISA KEV / EPSS enrichment.
+- **Guarantees**: Produces normalized, deduplicated package dependency records with evidence-backed vulnerability intelligence and explicit incomplete/conflict/error states.
 
 ### Engine 2: AI Security Intelligence Engine
 - **Purpose**: Determine the exact function-level vulnerability footprint from upstream advisories and patch commits.
@@ -103,14 +108,17 @@ flowchart TD
   - Vulnerable symbol extractor identifying file paths, class names, function names, and parameter signatures.
 - **Security Boundary**: Treats all advisory text, commit messages, and repository diffs as **untrusted data**. Strict prompt isolation prevents prompt injection attacks from altering vulnerability classifications.
 
-### Engine 3: Hybrid Reachability Engine
+### Engine 3: Hybrid Reachability Engine *(Python AST Static Reachability Implemented — Phase 5)*
 - **Purpose**: Determine whether candidate vulnerable functions can be reached from application entry points.
-- **Components**:
-  - Python AST visitor (`ast` module) and call graph builder (NetworkX directed graphs).
-  - Go parser and call-graph analyzer (`golang.org/x/tools/go/callgraph` - planned Phase 9).
-  - Symbol resolution engine tracking imports, aliases, class method dispatches, and transitive dependency chains.
+- **Implemented Components (`packages/core/analysis/python/`)**:
+  - Python source discovery (`PythonSourceDiscovery` with symlink skipping and `safe_resolve_path` containment) and AST parser (`ast` module, zero code execution).
+  - Symbol, import, and call resolution tracking (`extract_module_symbols`, `extract_import_table`, `PythonCallResolver`) for sync/async functions, classes, methods, nested `<locals>`, aliases, relative imports, and typed/local-instance receivers.
+  - Bounded `networkx.DiGraph` call graph construction (`PythonCallGraphBuilder`, `PythonCallGraph`) persisting `call-graph.json` and `reachability-analysis.json` with SHA-256 provenance.
+  - Entry-point detection (`EntryPointDetector`) supporting explicit `EntryPointConfig`, `__main__` blocks, FastAPI, Flask, Typer, and Click routes/commands.
+  - Dynamic construct & uncertainty tracking (`UnresolvedCall`, `AnalysisDiagnostic`) and 6-state conservative `ReachabilityState` classification (`reachable`, `no_path_within_supported_subset`, `unresolved`, `analysis_incomplete`, `missing_candidate_symbols`, `target_symbol_not_found`).
+- **Planned Extensions**:
+  - Go parser and call-graph analyzer (`golang.org/x/tools/go/callgraph` - planned later milestone).
   - Runtime execution collector (cProfile / OpenTelemetry / eBPF traces).
-  - Dynamic behavior detector flagging reflection, `getattr`, `eval`, and dynamic imports as explicit uncertainty notes (`DYNAMIC_DISPATCH_UNRESOLVED`).
 
 ### Engine 4: Attack Path Intelligence
 - **Purpose**: Model the realistic threat vector connecting an untrusted external actor to the vulnerable internal code.

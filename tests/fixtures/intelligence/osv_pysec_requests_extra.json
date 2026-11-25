@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.6.0",
+  "id": "PYSEC-2023-74",
+  "modified": "2026-10-05T08:00:00Z",
+  "published": "2023-05-23T00:00:00Z",
+  "aliases": ["CVE-2023-32681"],
+  "summary": "Unintended leak of Proxy-Authorization header in requests (PYSEC)",
+  "details": "Duplicate PYSEC record mirroring GHSA-j8r2-6x86-q33q.",
+  "affected": [
+    {
+      "package": {
+        "ecosystem": "PyPI",
+        "name": "requests",
+        "purl": "pkg:pypi/requests"
+      },
+      "ranges": [
+        {
+          "type": "ECOSYSTEM",
+          "events": [
+            { "introduced": "2.3.0" },
+            { "fixed": "2.31.0" }
+          ]
+        }
+      ]
+    }
+  ]
+}

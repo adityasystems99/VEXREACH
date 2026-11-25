@@ -1,0 +1,22 @@
+{
+  "manifest_version": "1.0",
+  "entries": [
+    {
+      "vulnerability_id": "CVE-2024-10003",
+      "package": {
+        "ecosystem": "pypi",
+        "name": "xml-wrapper",
+        "import_names": ["xml"]
+      },
+      "symbols": [
+        {
+          "module": "xml.etree.ElementTree",
+          "qualified_name": "xml.etree.ElementTree.fromstring",
+          "symbol_type": "function",
+          "source": "upstream_patch_diff",
+          "confidence": "high"
+        }
+      ]
+    }
+  ]
+}

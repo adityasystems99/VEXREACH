@@ -1,0 +1,22 @@
+{
+  "manifest_version": "1.0",
+  "entries": [
+    {
+      "vulnerability_id": "CVE-2024-10004",
+      "package": {
+        "ecosystem": "pypi",
+        "name": "urllib-wrapper",
+        "import_names": ["urllib"]
+      },
+      "symbols": [
+        {
+          "module": "urllib.request",
+          "qualified_name": "urllib.request.urlopen",
+          "symbol_type": "function",
+          "source": "curated_advisory_analysis",
+          "confidence": "verified"
+        }
+      ]
+    }
+  ]
+}

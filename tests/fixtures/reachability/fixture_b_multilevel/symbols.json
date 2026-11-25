@@ -1,0 +1,22 @@
+{
+  "manifest_version": "1.0",
+  "entries": [
+    {
+      "vulnerability_id": "CVE-2024-10002",
+      "package": {
+        "ecosystem": "pypi",
+        "name": "defused-demo-xml",
+        "import_names": ["xml"]
+      },
+      "symbols": [
+        {
+          "module": "xml.etree.ElementTree",
+          "qualified_name": "xml.etree.ElementTree.fromstring",
+          "symbol_type": "function",
+          "source": "curated_advisory_analysis",
+          "confidence": "verified"
+        }
+      ]
+    }
+  ]
+}

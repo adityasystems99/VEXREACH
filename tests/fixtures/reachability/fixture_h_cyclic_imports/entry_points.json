@@ -1,0 +1,9 @@
+{
+  "entry_points": [
+    {
+      "module": "pkg.a",
+      "qualified_name": "start",
+      "source": "user_config"
+    }
+  ]
+}

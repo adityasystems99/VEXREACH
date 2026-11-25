@@ -58,33 +58,40 @@ sequenceDiagram
 
 ## 2. Refinement Stages & Data Transformations
 
-### Stage 1: Ingestion & Discovery Normalization
+### Stage 1: Ingestion & Discovery Normalization (Implemented in Phase 3)
 - **Input**:
-  - Source directory: `Path`
-  - CycloneDX / SPDX SBOM JSON file or Trivy CLI scan output.
+  - Local repository/filesystem directory path: `Path` (validated without executing target files).
 - **Transformation**:
-  - Raw JSON manifests are validated against Pydantic schemas.
-  - Package identifiers are normalized to Package URLs (`purl`, e.g., `pkg:pypi/requests@2.28.1`).
-  - Vulnerabilities are correlated against OSV databases to produce an immutable `VulnerabilityRecord`.
-- **Output Data Model**:
+  - `TrivyClient` generates a CycloneDX JSON SBOM (`sbom-cyclonedx.json`) and raw vulnerability report (`raw-trivy-vuln.json`).
+  - `CycloneDXParser` validates CycloneDX 1.4/1.5/1.6 structure, extracts `direct` vs. `transitive` dependency scopes, and determines SBOM completeness (`complete`, `incomplete`, `failed`).
+  - `TrivyReportParser` validates raw Trivy JSON structure (rejecting arbitrary/unrelated JSON).
+  - `DiscoveryNormalizer` normalizes PURLs, ecosystems, severities, and multi-vendor CVSS metrics into canonical `PackageRecord` and `VulnerabilityRecord` instances linked by `package_id` without duplicating package metadata.
+  - `EvidenceStore` persists raw artifacts, normalized `DiscoveryResult` (`discovery-assessment.json`), and SHA-256 `provenance.json`.
+- **Output Data Models (`packages/core/models/discovery.py`)**:
   ```python
-  class NormalizedDependency(BaseModel):
-      purl: str
+  class PackageRecord(VEXReachBaseModel):
+      package_id: str
       name: str
-      version: str
+      version: str | None
       ecosystem: str
-      direct: bool
-      dependencies: list[str]
+      purl: str | None
+      dependency_scope: DependencyScope  # direct | transitive | unknown
+      source_metadata: dict[str, Any]
 
-  class VulnerabilityRecord(BaseModel):
-      cve_id: str
-      purl: str
-      summary: str
-      details: str
-      aliases: list[str]
+  class VulnerabilityRecord(VEXReachBaseModel):
+      vulnerability_id: str
+      package_id: str
+      installed_version: str | None
       fixed_version: str | None
-      advisory_urls: list[str]
+      severity: SeverityLevel
+      cvss: list[CVSSMetric]
+      description: str
+      references: list[str]
+      primary_url: str | None
+      source: str
+      detection_timestamp: datetime
   ```
+- *(Phase 4 Implemented)*: `IntelligenceOrchestrator` enriches `DiscoveryResult` via `OSVClient` (`/v1/querybatch` + `/v1/vulns/{id}`), caches advisories in `SQLiteAdvisoryCache`, runs `VulnerabilityCorrelator` and `VersionRangeEvaluator` (PEP 440 / SemVer 2.0.0), persists `raw-osv-responses.json`, and attaches `VulnerabilityIntelligenceReport` onto `DiscoveryResult.intelligence` without discarding original scanner records.
 
 ### Stage 2: Function-Level Vulnerability Identification
 - **Input**: `VulnerabilityRecord` + upstream Git commits/patches.
@@ -104,29 +111,17 @@ sequenceDiagram
       provenance_source: str # commit URL, advisory reference
   ```
 
-### Stage 3: Static Call Graph & Reachability Evaluation
-- **Input**: Application Source Code AST + `list[VulnerableSymbolSignature]`.
+### Stage 3: Static Call Graph & Reachability Evaluation *(Python AST Implemented — Phase 5)*
+- **Input**: Application Source Code AST + `VulnerabilitySymbolManifest` (+ optional `EntryPointConfig` & local `--dependency-source`).
 - **Transformation**:
-  - Python AST visitor extracts all function definitions, class methods, and call sites.
-  - Interprocedural call graph is constructed as a `networkx.DiGraph`.
-  - Application entry points are mapped (FastAPI routes, `@app.route`, `if __name__ == '__main__':`, CLI commands).
-  - Graph path traversal searches for all directed paths: `entry_point -> ... -> vulnerable_symbol`.
-  - Dynamic behaviors (`getattr`, `__import__`, `exec`, `eval`) are detected and recorded as unresolved nodes.
-- **Output Data Model**:
-  ```python
-  class ReachabilityStatus(str, Enum):
-      REACHABLE = "reachable"
-      UNREACHABLE = "unreachable"
-      DYNAMIC_UNCERTAINTY = "dynamic_uncertainty"
-      UNSUPPORTED = "unsupported"
-
-  class ReachabilityEvidence(BaseModel):
-      status: ReachabilityStatus
-      call_paths: list[list[str]] # sequence of function identifiers
-      unresolved_dynamic_calls: list[str]
-      entry_points_evaluated: list[str]
-      analysis_depth: int
-  ```
+  - Python `ast` discovery & symbol extractor collects functions, async functions, classes, methods, nested `<locals>`, `__main__` blocks, and scoped imports without executing code.
+  - `PythonCallGraphBuilder` constructs a bounded `networkx.DiGraph` with repository-relative POSIX `CodeLocation` metadata.
+  - `EntryPointDetector` maps explicit config rules, `__main__` guards, FastAPI/Flask routes, and Typer/Click CLI commands.
+  - Bounded path traversal enumerates simple paths (`nx.all_simple_paths` + `nx.has_path` depth-exceeded guard) from entry points to candidate dependency symbols.
+  - Dynamic behaviors (`getattr`, `eval`, `exec`, `__import__`, `importlib.import_module`, wildcard imports, subscript dispatch, ambiguous receivers) are recorded as `UnresolvedCall` / `AnalysisDiagnostic`.
+- **Output Data Model** (`packages/core/models/reachability.py`):
+  - `ReachabilityState`: `reachable`, `no_path_within_supported_subset`, `unresolved`, `analysis_incomplete`, `missing_candidate_symbols`, `target_symbol_not_found`.
+  - `StaticReachabilityReport` attached optionally to `DiscoveryResult.reachability`, with standalone `reachability-analysis.json`, `call-graph.json`, `candidate-symbols.json`, and SHA-256 `provenance.json`.
 
 ### Stage 4: Attack Path Modeling
 - **Input**: `ReachabilityEvidence` + Application Route Context.

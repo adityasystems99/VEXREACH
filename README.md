@@ -49,6 +49,7 @@ For detailed architecture documentation, see:
 ### Prerequisites
 - Python 3.12+ (tested on Python 3.12, 3.13, 3.14)
 - Git
+- [Trivy](https://trivy.dev/) CLI (required for running `vexreach scan` vulnerability discovery)
 
 ### Installation
 ```bash
@@ -74,9 +75,27 @@ pip install -e ".[dev]"
 # Check version and environment status
 vexreach version
 
-# Validate system configuration
+# Validate system configuration and Trivy availability
 vexreach check-config
+
+# Run Discovery Engine against a local repository
+vexreach scan ./sample-app --output ./out --format table
+
+# Run Discovery Engine + OSV.dev Vulnerability Intelligence enrichment
+vexreach scan ./sample-app --output ./out --enrich
+
+# Inspect a stored assessment's intelligence report
+vexreach intelligence ./out
+
+# Run Python AST static call-graph reachability analysis standalone or with scan
+vexreach analyze ./my-app --symbols ./symbols.json --output ./out
+vexreach scan ./my-app --enrich --analyze --symbols ./symbols.json --output ./out
 ```
+
+For detailed documentation, see:
+- [Discovery Engine Guide](docs/development/DISCOVERY_ENGINE.md)
+- [Vulnerability Intelligence Engine Guide](docs/development/VULNERABILITY_INTELLIGENCE.md)
+- [Python Static Reachability Guide](docs/development/PYTHON_STATIC_REACHABILITY.md)
 
 ---
 

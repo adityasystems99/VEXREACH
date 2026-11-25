@@ -3,11 +3,13 @@
 ## 1. Objective of the MVP
 
 The MVP delivers the minimal end-to-end, reproducible pipeline for analyzing a Python application repository:
-1. Ingest application dependencies and known vulnerabilities.
-2. Construct an application static call graph from Python source code.
-3. Correlate candidate vulnerable dependency functions against application call paths.
-4. Deterministically evaluate reachability.
-5. Emit an auditable, standards-compliant **OpenVEX 0.2.0** JSON document.
+1. Ingest application dependencies and known vulnerabilities (**Phase 3 Discovery Engine** + **Phase 4 OSV.dev Vulnerability Intelligence Engine** implemented; NVD/EPSS/KEV in later phases).
+2. Construct an application static call graph from Python source code (**Phase 5 Python Static Reachability Engine** implemented).
+3. Correlate candidate vulnerable dependency functions against application call paths (**Phase 5 Python Static Reachability Engine** implemented via validated `VulnerabilitySymbolManifest`).
+4. Deterministically evaluate reachability (explicit 6-state static outcome implemented in Phase 5; runtime & full policy evaluation in later phases).
+5. Emit an auditable, standards-compliant **OpenVEX 0.2.0** JSON document (planned).
+
+See [DISCOVERY_ENGINE.md](DISCOVERY_ENGINE.md), [VULNERABILITY_INTELLIGENCE.md](VULNERABILITY_INTELLIGENCE.md), and [PYTHON_STATIC_REACHABILITY.md](PYTHON_STATIC_REACHABILITY.md) for acceptance criteria and boundaries.
 
 ---
 

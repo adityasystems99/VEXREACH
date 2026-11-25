@@ -1,0 +1,108 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-11-25T10:00:00Z",
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "trivy",
+          "version": "0.58.1"
+        }
+      ]
+    },
+    "component": {
+      "bom-ref": "repo-root-ref",
+      "type": "application",
+      "name": "sample_app"
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "manifest-req-txt",
+      "type": "application",
+      "name": "requirements.txt",
+      "properties": [
+        { "name": "aquasecurity:trivy:Class", "value": "lang-pkgs" },
+        { "name": "aquasecurity:trivy:Type", "value": "pip" }
+      ]
+    },
+    {
+      "bom-ref": "pkg:pypi/requests@2.28.1",
+      "type": "library",
+      "name": "requests",
+      "version": "2.28.1",
+      "purl": "pkg:pypi/requests@2.28.1",
+      "properties": [
+        { "name": "aquasecurity:trivy:PkgType", "value": "pip" },
+        { "name": "aquasecurity:trivy:FilePath", "value": "requirements.txt" }
+      ]
+    },
+    {
+      "bom-ref": "pkg:pypi/urllib3@1.26.15",
+      "type": "library",
+      "name": "urllib3",
+      "version": "1.26.15",
+      "purl": "pkg:pypi/urllib3@1.26.15",
+      "properties": [
+        { "name": "aquasecurity:trivy:PkgType", "value": "pip" },
+        { "name": "aquasecurity:trivy:FilePath", "value": "requirements.txt" }
+      ]
+    },
+    {
+      "bom-ref": "pkg:pypi/pyyaml@5.4.1",
+      "type": "library",
+      "name": "PyYAML",
+      "version": "5.4.1",
+      "purl": "pkg:pypi/pyyaml@5.4.1",
+      "properties": [
+        { "name": "aquasecurity:trivy:PkgType", "value": "pip" },
+        { "name": "aquasecurity:trivy:FilePath", "value": "requirements.txt" }
+      ]
+    },
+    {
+      "bom-ref": "no-purl-helper-ref",
+      "type": "library",
+      "name": "internal-helper",
+      "version": "0.1.0",
+      "properties": [
+        { "name": "aquasecurity:trivy:PkgType", "value": "pip" },
+        { "name": "aquasecurity:trivy:FilePath", "value": "requirements.txt" }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "repo-root-ref",
+      "dependsOn": ["manifest-req-txt"]
+    },
+    {
+      "ref": "manifest-req-txt",
+      "dependsOn": [
+        "pkg:pypi/requests@2.28.1",
+        "pkg:pypi/pyyaml@5.4.1",
+        "no-purl-helper-ref"
+      ]
+    },
+    {
+      "ref": "pkg:pypi/requests@2.28.1",
+      "dependsOn": ["pkg:pypi/urllib3@1.26.15"]
+    },
+    {
+      "ref": "pkg:pypi/urllib3@1.26.15",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:pypi/pyyaml@5.4.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "no-purl-helper-ref",
+      "dependsOn": []
+    }
+  ]
+}

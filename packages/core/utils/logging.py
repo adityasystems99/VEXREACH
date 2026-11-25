@@ -3,7 +3,7 @@
 import json
 import logging
 import sys
-from typing import Any
+from typing import Any, TextIO
 
 
 class JSONFormatter(logging.Formatter):
@@ -31,7 +31,11 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_entry, default=str)
 
 
-def setup_logging(level: str = "INFO", log_format: str = "console") -> None:
+def setup_logging(
+    level: str = "INFO",
+    log_format: str = "console",
+    stream: TextIO | None = None,
+) -> None:
     """Configure root logger with the specified log level and output format."""
     root_logger = logging.getLogger()
     root_logger.setLevel(level.upper())
@@ -39,7 +43,7 @@ def setup_logging(level: str = "INFO", log_format: str = "console") -> None:
     # Clear existing handlers
     root_logger.handlers.clear()
 
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(stream if stream is not None else sys.stdout)
     handler.setLevel(level.upper())
 
     if log_format.lower() == "json":

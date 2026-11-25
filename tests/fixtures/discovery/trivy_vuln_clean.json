@@ -1,0 +1,13 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "sample_app",
+  "ArtifactType": "filesystem",
+  "Results": [
+    {
+      "Target": "requirements.txt",
+      "Class": "lang-pkgs",
+      "Type": "pip",
+      "Vulnerabilities": null
+    }
+  ]
+}

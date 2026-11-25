@@ -1,0 +1,14 @@
+{
+  "manifest_version": "1.0",
+  "entries": [
+    {
+      "vulnerability_id": "CVE-2024-5555",
+      "package": {
+        "ecosystem": "pypi",
+        "name": "PyYAML",
+        "import_names": ["yaml"]
+      },
+      "symbols": []
+    }
+  ]
+}
