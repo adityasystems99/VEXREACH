@@ -1,0 +1,22 @@
+{
+  "manifest_version": "1.0",
+  "entries": [
+    {
+      "vulnerability_id": "CVE-2020-14343",
+      "package": {
+        "ecosystem": "pypi",
+        "name": "PyYAML",
+        "import_names": ["yaml"]
+      },
+      "symbols": [
+        {
+          "module": "yaml",
+          "qualified_name": "yaml.load",
+          "symbol_type": "function",
+          "source": "curated_advisory_analysis",
+          "confidence": "verified"
+        }
+      ]
+    }
+  ]
+}

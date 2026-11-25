@@ -52,6 +52,12 @@ coverage.xml
 *.sqlite3
 *.db
 *.log
+.vexreach/
+.env
+vexreach-self.cdx.json
+provenance-check.json
+benchmark-report.json
+go-benchmark-report.json
 
 # OS-generated files
 .DS_Store

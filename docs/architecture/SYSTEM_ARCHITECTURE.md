@@ -99,13 +99,14 @@ flowchart TD
   - Container image scanning (`trivy image`), SPDX 2.3 ingestion, and NVD / CISA KEV / EPSS enrichment.
 - **Guarantees**: Produces normalized, deduplicated package dependency records with evidence-backed vulnerability intelligence and explicit incomplete/conflict/error states.
 
-### Engine 2: AI Security Intelligence Engine
+### Engine 2: AI Security Intelligence Engine *(Implemented — Milestone 3)*
 - **Purpose**: Determine the exact function-level vulnerability footprint from upstream advisories and patch commits.
-- **Components**:
-  - Upstream patch commit fetcher (GitHub API, Git submodules).
-  - Tree-sitter and AST diff analyzer comparing vulnerable vs. fixed commits.
-  - LLM-assisted advisory reasoning agent equipped with schema-enforced structured outputs.
-  - Vulnerable symbol extractor identifying file paths, class names, function names, and parameter signatures.
+- **Implemented Components (`packages/core/engines/ai_intelligence/`)**:
+  - `PatchFetcher`: Local `.diff`/`.patch` ingestion and allowlisted HTTPS commit/PR diff fetcher (SSRF IP blocking, redirect checks, byte caps, SHA-256).
+  - `patch_parser`: Unified diff parser and pre/post-patch Python AST comparator + dependency source line alignment.
+  - `PromptSanitizer`: Strips control/ANSI sequences, quarantines untrusted advisory/diff blocks with per-request nonce XML delimiters, and logs indirect prompt-injection attempts.
+  - `LLMProvider`: Interchangeable HTTP client abstraction (`DisabledLLMProvider`, `OpenAICompatibleLLMProvider`, `AnthropicLLMProvider`) stripping any unauthorized status verdicts (`not_affected`, `reachable`, `exploitable`).
+  - `CandidateSymbolValidator`: Validates syntax, package import root membership, and dependency AST presence (`VERIFIED_IN_DEPENDENCY_SOURCE` / `ABSENT_IN_DEPENDENCY_SOURCE_AST`), keeping unverified AI symbols as `ai_assisted_unverified`.
 - **Security Boundary**: Treats all advisory text, commit messages, and repository diffs as **untrusted data**. Strict prompt isolation prevents prompt injection attacks from altering vulnerability classifications.
 
 ### Engine 3: Hybrid Reachability Engine *(Python AST Static Reachability Implemented — Phase 5)*
@@ -120,13 +121,12 @@ flowchart TD
   - Go parser and call-graph analyzer (`golang.org/x/tools/go/callgraph` - planned later milestone).
   - Runtime execution collector (cProfile / OpenTelemetry / eBPF traces).
 
-### Engine 4: Attack Path Intelligence
-- **Purpose**: Model the realistic threat vector connecting an untrusted external actor to the vulnerable internal code.
-- **Components**:
-  - Entry point classifier (HTTP routes in FastAPI/Flask, CLI argument handlers, message queue subscribers).
-  - Source-to-sink taint and data-flow approximations.
-  - Trust boundary identification (authenticated vs. unauthenticated endpoints).
-  - Human-readable path explainer detailing the step-by-step hops from external interface to vulnerable subroutine.
+### Engine 4: Attack Path Intelligence *(Implemented — Milestone 4)*
+- **Purpose**: Model the threat vector connecting external/CLI ingress to reachable dependency symbols while strictly separating call reachability from data-flow proof.
+- **Implemented Components (`packages/core/engines/attack_path/`)**:
+  - `classify_entry_surface`: Classifies `network_http_public`, `network_http_authenticated`, `cli_local_input`, `internal_function`, authentication decorators/`Depends(...)` barriers, and input parameters.
+  - `trace_taint_along_path`: Conservative intra-procedural AST assignment and argument taint propagation distinguishing `tainted_flow_observed`, `call_path_only_taint_not_proven`, and `sanitized_or_validated`.
+  - `AttackPathOrchestrator`: Generates explainable `AttackPathReport` linked to `DiscoveryResult.attack_paths` and `attack-paths.json`.
 
 ### Engine 5: Risk Intelligence
 - **Purpose**: Calculate explainable, prioritized risk metrics based on environmental context.
@@ -150,16 +150,12 @@ flowchart TD
   - CVE advisory stream listener (detecting newly published advisories for existing packages).
   - Automated reassessment engine triggering partial graph re-evaluations without rescanning unchanged components.
 
-### Engine 8: Evidence and OpenVEX Engine
-- **Purpose**: Assemble verifiable evidence and emit cryptographic or digitally signed OpenVEX documents.
-- **Components**:
-  - Deterministic policy evaluator mapping graph state to standard OpenVEX statuses:
-    - `affected`: Static or runtime reachability path verified.
-    - `not_affected`: Proof of no static path within the closed-world assumption; explicit justification provided (e.g., `vulnerable_code_not_in_execute_path`, `vulnerable_code_not_present`).
-    - `under_investigation`: Dynamic uncertainty present or advisory patch analysis incomplete.
-    - `fixed`: Patch verified in current dependency version.
-  - OpenVEX JSON-LD serializer compliant with the OpenVEX 0.2.0 specification.
-  - Audit log recorder tracking analysis timestamps, tool versions, and cryptographic hashes of inputs.
+### Engine 8: Evidence and OpenVEX Engine *(Implemented — Milestone 5)*
+- **Purpose**: Assemble verifiable evidence and emit deterministic, schema-validated OpenVEX 0.2.0 documents with revision history.
+- **Implemented Components (`packages/core/policies/`, `packages/core/engines/openvex/`, `packages/core/storage/`)**:
+  - `evaluate_vex_policy`: Fail-closed deterministic rule evaluator checking scan/SBOM completeness, intelligence conflicts, candidate symbol dependency AST verification, and unresolved dynamic calls before permitting `not_affected` (`vulnerable_code_not_in_execute_path`). Defaults any uncertainty or conflict cleanly to `under_investigation`.
+  - `validate_openvex_document` & `VEXStatement` validators: Enforce OpenVEX 0.2.0 structural invariants (`@context`, ISO timestamps, mandatory `justification`/`impact_statement` on `not_affected`).
+  - `SQLiteVEXStore` & `EvidenceStore`: Tracks monotonic revision versions in SQLite and persists `openvex.vex.json` + `policy-evaluation.json` with SHA-256 hashes in `provenance.json`.
 
 ---
 

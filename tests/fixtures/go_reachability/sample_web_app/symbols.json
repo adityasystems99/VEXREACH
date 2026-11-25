@@ -1,0 +1,24 @@
+{
+  "manifest_version": "1.0",
+  "entries": [
+    {
+      "vulnerability_id": "CVE-2022-28948",
+      "package": {
+        "ecosystem": "golang",
+        "name": "gopkg.in/yaml.v2",
+        "version": "2.2.8",
+        "purl": "pkg:golang/gopkg.in/yaml.v2@v2.2.8"
+      },
+      "symbols": [
+        {
+          "module": "gopkg.in/yaml.v2",
+          "qualified_name": "gopkg.in/yaml.v2.Unmarshal",
+          "symbol_type": "function",
+          "source": "curated_advisory_analysis",
+          "confidence": "verified",
+          "evidence_reference": "GHSA-hp87-p4gw-j4gq"
+        }
+      ]
+    }
+  ]
+}

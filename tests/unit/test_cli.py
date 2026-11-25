@@ -17,6 +17,23 @@ def test_cli_help() -> None:
     assert "check-config" in result.output
     assert "scan" in result.output
     assert "intelligence" in result.output
+    assert "analyze" in result.output
+    assert "extract-symbols" in result.output
+    assert "attack-paths" in result.output
+    assert "vex" in result.output
+    assert "risk" in result.output
+
+
+@pytest.mark.unit
+def test_cli_analyze_help() -> None:
+    """Verify 'vexreach analyze --help' exposes Python reachability analysis options."""
+    result = runner.invoke(app, ["analyze", "--help"])
+    assert result.exit_code == 0
+    assert "--symbols" in result.output
+    assert "--entry-points" in result.output
+    assert "--dependency-source" in result.output
+    assert "--max-depth" in result.output
+    assert "--max-paths" in result.output
 
 
 @pytest.mark.unit

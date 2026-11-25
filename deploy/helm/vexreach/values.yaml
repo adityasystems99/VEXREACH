@@ -1,0 +1,29 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/adityasystems99/vexreach
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+config:
+  logLevel: "INFO"
+  llmProvider: "disabled"
+  apiAuthEnabled: "true"
+  rateLimitPerMinute: "120"
+  kubernetesEnabled: "true"
+
+persistence:
+  enabled: false
+  storageSize: 5Gi

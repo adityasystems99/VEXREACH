@@ -90,12 +90,24 @@ vexreach intelligence ./out
 # Run Python AST static call-graph reachability analysis standalone or with scan
 vexreach analyze ./my-app --symbols ./symbols.json --output ./out
 vexreach scan ./my-app --enrich --analyze --symbols ./symbols.json --output ./out
+
+# Run AI/Patch Symbol Extraction, Attack Path Intelligence, and OpenVEX 0.2.0 emission
+vexreach extract-symbols ./out --patch-dir ./patches --dependency-source ./vendor_src
+vexreach attack-paths ./out --target ./my-app
+vexreach vex ./out --format json > openvex.vex.json
+
+# Full End-to-End Python MVP workflow in one command
+vexreach scan ./my-app --enrich --extract-symbols --patch-dir ./patches --dependency-source ./vendor_src --analyze --attack-paths --emit-vex --output ./out
 ```
 
 For detailed documentation, see:
+- [Project Status](docs/development/PROJECT_STATUS.md)
 - [Discovery Engine Guide](docs/development/DISCOVERY_ENGINE.md)
 - [Vulnerability Intelligence Engine Guide](docs/development/VULNERABILITY_INTELLIGENCE.md)
+- [AI Security Intelligence Guide](docs/development/AI_SECURITY_INTELLIGENCE.md)
 - [Python Static Reachability Guide](docs/development/PYTHON_STATIC_REACHABILITY.md)
+- [Attack Path Intelligence Guide](docs/development/ATTACK_PATH_INTELLIGENCE.md)
+- [Evidence & OpenVEX Engine Guide](docs/development/OPENVEX_AND_POLICY_ENGINE.md)
 
 ---
 

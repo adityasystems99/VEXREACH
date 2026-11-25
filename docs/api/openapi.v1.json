@@ -1,0 +1,4572 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "VEXReach Backend API",
+    "description": "Backend Vulnerability Intelligence API distinguishing vulnerable dependency presence, candidate symbols, static call paths, runtime observations, and OpenVEX policy.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Healthz",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Readyz",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments": {
+      "post": {
+        "tags": [
+          "Assessments"
+        ],
+        "summary": "Create Assessment",
+        "operationId": "create_assessment_api_v1_assessments_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssessmentCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Assessments"
+        ],
+        "summary": "List Assessments",
+        "operationId": "list_assessments_api_v1_assessments_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "scan_status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scan Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedAssessmentsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "Assessments"
+        ],
+        "summary": "Get Job Status",
+        "operationId": "get_job_status_api_v1_jobs__job_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}": {
+      "get": {
+        "tags": [
+          "Assessments"
+        ],
+        "summary": "Get Assessment",
+        "operationId": "get_assessment_api_v1_assessments__assessment_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Assessment Api V1 Assessments  Assessment Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/vulnerabilities": {
+      "get": {
+        "tags": [
+          "Findings"
+        ],
+        "summary": "Get Vulnerabilities",
+        "operationId": "get_vulnerabilities_api_v1_assessments__assessment_id__vulnerabilities_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Severity"
+            }
+          },
+          {
+            "name": "reachability_state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reachability State"
+            }
+          },
+          {
+            "name": "openvex_status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Openvex Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedVulnerabilitiesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/dependencies": {
+      "get": {
+        "tags": [
+          "Findings"
+        ],
+        "summary": "Get Dependencies",
+        "operationId": "get_dependencies_api_v1_assessments__assessment_id__dependencies_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          },
+          {
+            "name": "ecosystem",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ecosystem"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedDependenciesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/reachability": {
+      "get": {
+        "tags": [
+          "Analysis"
+        ],
+        "summary": "Get Reachability",
+        "operationId": "get_reachability_api_v1_assessments__assessment_id__reachability_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaticReachabilityReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/attack-paths": {
+      "get": {
+        "tags": [
+          "Analysis"
+        ],
+        "summary": "Get Attack Paths",
+        "operationId": "get_attack_paths_api_v1_assessments__assessment_id__attack_paths_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttackPathReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/risk": {
+      "get": {
+        "tags": [
+          "Risk"
+        ],
+        "summary": "Get Risk",
+        "operationId": "get_risk_api_v1_assessments__assessment_id__risk_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskIntelligenceReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/runtime-observations": {
+      "get": {
+        "tags": [
+          "Runtime"
+        ],
+        "summary": "Get Runtime Observations",
+        "operationId": "get_runtime_observations_api_v1_assessments__assessment_id__runtime_observations_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeEvidenceReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Runtime"
+        ],
+        "summary": "Ingest Runtime Observations",
+        "operationId": "ingest_runtime_observations_api_v1_assessments__assessment_id__runtime_observations_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeObservationsIngestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeEvidenceReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/simulate": {
+      "post": {
+        "tags": [
+          "Simulation"
+        ],
+        "summary": "Simulate Remediation",
+        "operationId": "simulate_remediation_api_v1_assessments__assessment_id__simulate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhatIfSimulationReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/evidence": {
+      "get": {
+        "tags": [
+          "Evidence & OpenVEX"
+        ],
+        "summary": "Get Evidence",
+        "operationId": "get_evidence_api_v1_assessments__assessment_id__evidence_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceArtifactsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/openvex": {
+      "get": {
+        "tags": [
+          "Evidence & OpenVEX"
+        ],
+        "summary": "Get Openvex Document",
+        "operationId": "get_openvex_document_api_v1_assessments__assessment_id__openvex_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Openvex Document Api V1 Assessments  Assessment Id  Openvex Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/policy-evaluation": {
+      "get": {
+        "tags": [
+          "Evidence & OpenVEX"
+        ],
+        "summary": "Get Policy Evaluation",
+        "operationId": "get_policy_evaluation_api_v1_assessments__assessment_id__policy_evaluation_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenVEXPolicyReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/history": {
+      "get": {
+        "tags": [
+          "Evidence & OpenVEX"
+        ],
+        "summary": "Get Assessment History",
+        "operationId": "get_assessment_history_api_v1_assessments__assessment_id__history_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Assessment History Api V1 Assessments  Assessment Id  History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/reassess-plan": {
+      "post": {
+        "tags": [
+          "Continuous"
+        ],
+        "summary": "Compute Reassessment Plan",
+        "operationId": "compute_reassessment_plan_api_v1_assessments__assessment_id__reassess_plan_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReassessmentPlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContinuousReassessmentPlan"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/integrations": {
+      "get": {
+        "tags": [
+          "Integrations"
+        ],
+        "summary": "List Integrations",
+        "operationId": "list_integrations_api_v1_integrations_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IntegrationDescriptor"
+                  },
+                  "type": "array",
+                  "title": "Response List Integrations Api V1 Integrations Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/ci": {
+      "post": {
+        "tags": [
+          "Integrations"
+        ],
+        "summary": "Receive Ci Webhook",
+        "operationId": "receive_ci_webhook_api_v1_webhooks_ci_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookCIRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookCIResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/audit-logs": {
+      "get": {
+        "tags": [
+          "Governance"
+        ],
+        "summary": "List Audit Logs",
+        "operationId": "list_audit_logs_api_v1_audit_logs_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditLogEntryResponse"
+                  },
+                  "title": "Response List Audit Logs Api V1 Audit Logs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AnalysisDiagnostic": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Code"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "error"
+            ],
+            "title": "Severity",
+            "default": "warning"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Message"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodeLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "construct_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Construct Kind"
+          },
+          "affected_scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Affected Scope"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "AnalysisDiagnostic",
+        "description": "Structured diagnostic explaining analysis limitations, errors, or truncation."
+      },
+      "AssessmentCreateRequest": {
+        "properties": {
+          "target_path": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Target Path"
+          },
+          "enrich_osv": {
+            "type": "boolean",
+            "title": "Enrich Osv",
+            "default": false
+          },
+          "extract_symbols": {
+            "type": "boolean",
+            "title": "Extract Symbols",
+            "default": false
+          },
+          "patch_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patch Dir"
+          },
+          "symbols_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbols File"
+          },
+          "entry_points_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Points File"
+          },
+          "dependency_source_dirs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Dependency Source Dirs"
+          },
+          "analyze_python": {
+            "type": "boolean",
+            "title": "Analyze Python",
+            "default": true
+          },
+          "analyze_go": {
+            "type": "boolean",
+            "title": "Analyze Go",
+            "default": true
+          },
+          "attack_paths": {
+            "type": "boolean",
+            "title": "Attack Paths",
+            "default": false
+          },
+          "compute_risk": {
+            "type": "boolean",
+            "title": "Compute Risk",
+            "default": true
+          },
+          "emit_vex": {
+            "type": "boolean",
+            "title": "Emit Vex",
+            "default": true
+          },
+          "workload_context": {
+            "$ref": "#/components/schemas/WorkloadContext"
+          },
+          "async_execution": {
+            "type": "boolean",
+            "title": "Async Execution",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_path"
+        ],
+        "title": "AssessmentCreateRequest"
+      },
+      "AssessmentSummaryItem": {
+        "properties": {
+          "assessment_id": {
+            "type": "string",
+            "title": "Assessment Id"
+          },
+          "target_path": {
+            "type": "string",
+            "title": "Target Path"
+          },
+          "scan_status": {
+            "type": "string",
+            "title": "Scan Status"
+          },
+          "sbom_completeness": {
+            "type": "string",
+            "title": "Sbom Completeness"
+          },
+          "packages_count": {
+            "type": "integer",
+            "title": "Packages Count"
+          },
+          "vulnerabilities_count": {
+            "type": "integer",
+            "title": "Vulnerabilities Count"
+          },
+          "has_intelligence": {
+            "type": "boolean",
+            "title": "Has Intelligence"
+          },
+          "has_reachability": {
+            "type": "boolean",
+            "title": "Has Reachability"
+          },
+          "has_attack_paths": {
+            "type": "boolean",
+            "title": "Has Attack Paths"
+          },
+          "has_risk": {
+            "type": "boolean",
+            "title": "Has Risk"
+          },
+          "has_openvex": {
+            "type": "boolean",
+            "title": "Has Openvex"
+          },
+          "scan_started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scan Started At"
+          },
+          "scan_completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Completed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assessment_id",
+          "target_path",
+          "scan_status",
+          "sbom_completeness",
+          "packages_count",
+          "vulnerabilities_count",
+          "has_intelligence",
+          "has_reachability",
+          "has_attack_paths",
+          "has_risk",
+          "has_openvex",
+          "scan_started_at"
+        ],
+        "title": "AssessmentSummaryItem"
+      },
+      "AttackPathRecord": {
+        "properties": {
+          "path_id": {
+            "type": "string",
+            "title": "Path Id"
+          },
+          "vulnerability_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Vulnerability Id"
+          },
+          "package_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Package Name"
+          },
+          "target_symbol": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Target Symbol"
+          },
+          "entry_point": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Entry Point"
+          },
+          "exposure_surface": {
+            "$ref": "#/components/schemas/ExposureSurface"
+          },
+          "is_network_exposed": {
+            "type": "boolean",
+            "title": "Is Network Exposed",
+            "default": false
+          },
+          "input_sources": {
+            "items": {
+              "$ref": "#/components/schemas/InputSourceRecord"
+            },
+            "type": "array",
+            "title": "Input Sources"
+          },
+          "auth_barriers": {
+            "items": {
+              "$ref": "#/components/schemas/BarrierEvidence"
+            },
+            "type": "array",
+            "title": "Auth Barriers"
+          },
+          "validation_barriers": {
+            "items": {
+              "$ref": "#/components/schemas/BarrierEvidence"
+            },
+            "type": "array",
+            "title": "Validation Barriers"
+          },
+          "call_hops": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Call Hops"
+          },
+          "data_flow_status": {
+            "$ref": "#/components/schemas/TaintFlowStatus"
+          },
+          "data_flow_steps": {
+            "items": {
+              "$ref": "#/components/schemas/DataFlowStep"
+            },
+            "type": "array",
+            "title": "Data Flow Steps"
+          },
+          "trust_boundaries": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Trust Boundaries"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Assumptions"
+          },
+          "missing_evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Evidence"
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Explanation"
+          },
+          "evidence_references": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence References"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vulnerability_id",
+          "package_name",
+          "target_symbol",
+          "entry_point",
+          "exposure_surface",
+          "data_flow_status",
+          "explanation"
+        ],
+        "title": "AttackPathRecord",
+        "description": "Explainable end-to-end attack path linking exposure, data flow, barriers, and sink."
+      },
+      "AttackPathReport": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "title": "Analysis Id"
+          },
+          "analyzed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Analyzed At"
+          },
+          "paths_evaluated": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Paths Evaluated",
+            "default": 0
+          },
+          "network_exposed_paths": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Network Exposed Paths",
+            "default": 0
+          },
+          "taint_observed_paths": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Taint Observed Paths",
+            "default": 0
+          },
+          "call_path_only_paths": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Call Path Only Paths",
+            "default": 0
+          },
+          "paths": {
+            "items": {
+              "$ref": "#/components/schemas/AttackPathRecord"
+            },
+            "type": "array",
+            "title": "Paths"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AttackPathReport",
+        "description": "Aggregate Attack Path Intelligence findings for an assessed Python repository."
+      },
+      "AuditLogEntryResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "actor_id": {
+            "type": "string",
+            "title": "Actor Id"
+          },
+          "actor_role": {
+            "type": "string",
+            "title": "Actor Role"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "resource": {
+            "type": "string",
+            "title": "Resource"
+          },
+          "status_code": {
+            "type": "integer",
+            "title": "Status Code"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "timestamp",
+          "actor_id",
+          "actor_role",
+          "action",
+          "resource",
+          "status_code"
+        ],
+        "title": "AuditLogEntryResponse"
+      },
+      "BarrierEvidence": {
+        "properties": {
+          "barrier_type": {
+            "type": "string",
+            "enum": [
+              "authentication",
+              "authorization",
+              "input_validation",
+              "safe_loader"
+            ],
+            "title": "Barrier Type"
+          },
+          "mechanism": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Mechanism"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodeLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "default": "medium"
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "barrier_type",
+          "mechanism"
+        ],
+        "title": "BarrierEvidence",
+        "description": "Authentication, authorization, or validation guard observed along a path."
+      },
+      "CallGraphEdge": {
+        "properties": {
+          "caller": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Caller"
+          },
+          "callee": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Callee"
+          },
+          "resolution_method": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Resolution Method"
+          },
+          "source_locations": {
+            "items": {
+              "$ref": "#/components/schemas/CodeLocation"
+            },
+            "type": "array",
+            "title": "Source Locations"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "caller",
+          "callee",
+          "resolution_method"
+        ],
+        "title": "CallGraphEdge",
+        "description": "Directed call edge with provenance and all observed source call sites."
+      },
+      "CandidateVulnerableSymbol": {
+        "properties": {
+          "module": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Module"
+          },
+          "qualified_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Qualified Name"
+          },
+          "symbol_type": {
+            "type": "string",
+            "enum": [
+              "function",
+              "method",
+              "class",
+              "attribute"
+            ],
+            "title": "Symbol Type",
+            "default": "function"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SymbolSource"
+          },
+          "evidence_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Reference"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/SymbolConfidence",
+            "default": "unverified"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SymbolEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "module",
+          "qualified_name",
+          "source"
+        ],
+        "title": "CandidateVulnerableSymbol",
+        "description": "A single candidate vulnerable symbol targeted by static reachability analysis."
+      },
+      "CodeLocation": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "title": "File",
+            "description": "Repository-relative POSIX path"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Line"
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Column",
+            "default": 0
+          },
+          "end_line": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Line"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "file",
+          "line"
+        ],
+        "title": "CodeLocation",
+        "description": "Portable repository-relative source code location."
+      },
+      "ContinuousReassessmentPlan": {
+        "properties": {
+          "assessment_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Assessment Id"
+          },
+          "evaluated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Evaluated At"
+          },
+          "reassessment_required": {
+            "type": "boolean",
+            "title": "Reassessment Required"
+          },
+          "triggers": {
+            "items": {
+              "$ref": "#/components/schemas/ReassessmentTriggerType"
+            },
+            "type": "array",
+            "title": "Triggers"
+          },
+          "affected_packages": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Affected Packages"
+          },
+          "affected_vulnerabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Affected Vulnerabilities"
+          },
+          "engines_to_rerun": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Engines To Rerun"
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Explanation"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assessment_id",
+          "reassessment_required",
+          "explanation"
+        ],
+        "title": "ContinuousReassessmentPlan",
+        "description": "Targeted reassessment plan computed from evidence drift without redundant full scans."
+      },
+      "DataFlowStep": {
+        "properties": {
+          "function_qualified_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Function Qualified Name"
+          },
+          "variable_or_expr": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Variable Or Expr"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "source",
+              "propagation",
+              "parameter_binding",
+              "validation_barrier",
+              "sink_argument"
+            ],
+            "title": "Role"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodeLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "function_qualified_name",
+          "variable_or_expr",
+          "role"
+        ],
+        "title": "DataFlowStep",
+        "description": "Single tracked variable or parameter flow step along a call path."
+      },
+      "DependencyScope": {
+        "type": "string",
+        "enum": [
+          "direct",
+          "transitive",
+          "unknown"
+        ],
+        "title": "DependencyScope",
+        "description": "Relationship of a package to the application root."
+      },
+      "DependencySymbolResolutionStatus": {
+        "type": "string",
+        "enum": [
+          "verified_in_dependency_source",
+          "not_found_in_dependency_source",
+          "dependency_source_unavailable",
+          "import_mapping_ambiguous",
+          "unsupported_symbol_structure"
+        ],
+        "title": "DependencySymbolResolutionStatus",
+        "description": "Resolution status of a candidate vulnerable symbol in dependency metadata/sources."
+      },
+      "EntryPoint": {
+        "properties": {
+          "qualified_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Qualified Name"
+          },
+          "module": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Module"
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source",
+            "description": "user_config, python_main_block, fastapi_route, etc."
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "candidate",
+              "unresolved"
+            ],
+            "title": "Confidence",
+            "default": "verified"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodeLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "qualified_name",
+          "module",
+          "source"
+        ],
+        "title": "EntryPoint",
+        "description": "Identified application entry point used as a traversal root."
+      },
+      "EvidenceArtifactsResponse": {
+        "properties": {
+          "assessment_id": {
+            "type": "string",
+            "title": "Assessment Id"
+          },
+          "assessment_dir": {
+            "type": "string",
+            "title": "Assessment Dir"
+          },
+          "evidence_hashes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Evidence Hashes"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assessment_id",
+          "assessment_dir",
+          "evidence_hashes"
+        ],
+        "title": "EvidenceArtifactsResponse"
+      },
+      "EvidenceCompletenessReport": {
+        "properties": {
+          "scan_completed": {
+            "type": "boolean",
+            "title": "Scan Completed"
+          },
+          "sbom_complete": {
+            "type": "boolean",
+            "title": "Sbom Complete"
+          },
+          "intelligence_checked": {
+            "type": "boolean",
+            "title": "Intelligence Checked"
+          },
+          "intelligence_conflict_free": {
+            "type": "boolean",
+            "title": "Intelligence Conflict Free"
+          },
+          "reachability_executed": {
+            "type": "boolean",
+            "title": "Reachability Executed"
+          },
+          "reachability_complete_without_truncation": {
+            "type": "boolean",
+            "title": "Reachability Complete Without Truncation"
+          },
+          "dependency_sources_verified": {
+            "type": "boolean",
+            "title": "Dependency Sources Verified"
+          },
+          "blocking_gaps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blocking Gaps"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scan_completed",
+          "sbom_complete",
+          "intelligence_checked",
+          "intelligence_conflict_free",
+          "reachability_executed",
+          "reachability_complete_without_truncation",
+          "dependency_sources_verified"
+        ],
+        "title": "EvidenceCompletenessReport",
+        "description": "Explicit completeness gate inputs constraining VEX policy conclusions."
+      },
+      "ExposureSurface": {
+        "type": "string",
+        "enum": [
+          "network_http_public",
+          "network_http_authenticated",
+          "cli_local_input",
+          "internal_function",
+          "unknown"
+        ],
+        "title": "ExposureSurface",
+        "description": "Classified application ingress exposure category."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status",
+            "default": "ok"
+          },
+          "service": {
+            "type": "string",
+            "title": "Service",
+            "default": "vexreach-api"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "api_version": {
+            "type": "string",
+            "title": "Api Version",
+            "default": "v1"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "title": "HealthResponse"
+      },
+      "InputSourceRecord": {
+        "properties": {
+          "source_kind": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source Kind"
+          },
+          "variable_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Variable Name"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodeLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_kind",
+          "variable_name"
+        ],
+        "title": "InputSourceRecord",
+        "description": "External or caller-controlled input entering an entry point."
+      },
+      "IntegrationCategory": {
+        "type": "string",
+        "enum": [
+          "scanner",
+          "vulnerability_intelligence",
+          "threat_intelligence",
+          "patch_source",
+          "llm_provider",
+          "notification",
+          "cicd",
+          "kubernetes"
+        ],
+        "title": "IntegrationCategory",
+        "description": "Supported backend plugin/integration adapter categories."
+      },
+      "IntegrationDescriptor": {
+        "properties": {
+          "integration_id": {
+            "type": "string",
+            "title": "Integration Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "category": {
+            "$ref": "#/components/schemas/IntegrationCategory"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          },
+          "auth_configured": {
+            "type": "boolean",
+            "title": "Auth Configured"
+          },
+          "is_local": {
+            "type": "boolean",
+            "title": "Is Local",
+            "default": false
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Capabilities"
+          },
+          "permission_boundary": {
+            "type": "string",
+            "title": "Permission Boundary"
+          },
+          "missing_requirements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Requirements"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "integration_id",
+          "name",
+          "category",
+          "enabled",
+          "configured",
+          "auth_configured",
+          "permission_boundary"
+        ],
+        "title": "IntegrationDescriptor",
+        "description": "Machine-readable status and capability contract for an external integration."
+      },
+      "JobStatusResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "assessment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessment Id"
+          },
+          "target_path": {
+            "type": "string",
+            "title": "Target Path"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "job_id",
+          "target_path",
+          "status",
+          "created_at"
+        ],
+        "title": "JobStatusResponse"
+      },
+      "OpenVEXDocument": {
+        "properties": {
+          "@context": {
+            "type": "string",
+            "title": "@Context",
+            "description": "JSON-LD context URL",
+            "default": "https://openvex.dev/ns/v0.2.0"
+          },
+          "@id": {
+            "type": "string",
+            "title": "@Id",
+            "description": "Unique IRI identifying this OpenVEX document"
+          },
+          "author": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Author",
+            "default": "VEXReach Automated Assessment Engine"
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Role",
+            "default": "Tool"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp",
+            "description": "ISO 8601 creation timestamp"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version",
+            "description": "Monotonic OpenVEX document version",
+            "default": 1
+          },
+          "tooling": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Tooling",
+            "default": "VEXReach v0.1.0"
+          },
+          "statements": {
+            "items": {
+              "$ref": "#/components/schemas/VEXStatement"
+            },
+            "type": "array",
+            "title": "Statements"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "OpenVEXDocument",
+        "description": "Full OpenVEX 0.2.0 document container."
+      },
+      "OpenVEXPolicyReport": {
+        "properties": {
+          "evaluation_id": {
+            "type": "string",
+            "title": "Evaluation Id"
+          },
+          "evaluated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Evaluated At"
+          },
+          "target_path": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Target Path"
+          },
+          "openvex_document": {
+            "$ref": "#/components/schemas/OpenVEXDocument"
+          },
+          "openvex_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openvex Sha256"
+          },
+          "openvex_file_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openvex File Path"
+          },
+          "schema_valid": {
+            "type": "boolean",
+            "title": "Schema Valid",
+            "default": false
+          },
+          "schema_errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Schema Errors"
+          },
+          "completeness": {
+            "$ref": "#/components/schemas/EvidenceCompletenessReport"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/VEXPolicyDecision"
+            },
+            "type": "array",
+            "title": "Decisions"
+          },
+          "status_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Status Counts"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_path",
+          "openvex_document",
+          "completeness"
+        ],
+        "title": "OpenVEXPolicyReport",
+        "description": "Complete Evidence Aggregation, Policy Evaluation, and OpenVEX emission audit record."
+      },
+      "PackageRecord": {
+        "properties": {
+          "package_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Package Id",
+            "description": "Deterministic canonical identifier unique within an assessment"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version",
+            "description": "Installed package version, or None if unreported"
+          },
+          "ecosystem": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Ecosystem",
+            "description": "Normalized ecosystem name (pypi, golang, npm, cargo, unknown, etc.)",
+            "default": "unknown"
+          },
+          "purl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purl",
+            "description": "Package URL (PURL) if available from SBOM or scanner"
+          },
+          "dependency_scope": {
+            "$ref": "#/components/schemas/DependencyScope",
+            "description": "Whether dependency is direct, transitive, or unknown",
+            "default": "unknown"
+          },
+          "source_metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Source Metadata",
+            "description": "Raw provenance attributes (e.g., manifest location, bom-ref, pkg type)"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "package_id",
+          "name"
+        ],
+        "title": "PackageRecord",
+        "description": "Normalized software component discovered in the target."
+      },
+      "PackageUpgradeProposal": {
+        "properties": {
+          "package_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Package Name"
+          },
+          "target_version": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Target Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "package_name",
+          "target_version"
+        ],
+        "title": "PackageUpgradeProposal",
+        "description": "Proposed dependency version upgrade to simulate in What-If engine."
+      },
+      "PaginatedAssessmentsResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AssessmentSummaryItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total",
+          "limit",
+          "offset",
+          "items"
+        ],
+        "title": "PaginatedAssessmentsResponse"
+      },
+      "PaginatedDependenciesResponse": {
+        "properties": {
+          "assessment_id": {
+            "type": "string",
+            "title": "Assessment Id"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PackageRecord"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assessment_id",
+          "total",
+          "limit",
+          "offset",
+          "items"
+        ],
+        "title": "PaginatedDependenciesResponse"
+      },
+      "PaginatedVulnerabilitiesResponse": {
+        "properties": {
+          "assessment_id": {
+            "type": "string",
+            "title": "Assessment Id"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VulnerabilityNonConflatedView"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assessment_id",
+          "total",
+          "limit",
+          "offset",
+          "items"
+        ],
+        "title": "PaginatedVulnerabilitiesResponse"
+      },
+      "ReachabilityPath": {
+        "properties": {
+          "entry_point": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Entry Point"
+          },
+          "target_symbol": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Target Symbol"
+          },
+          "nodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 2,
+            "title": "Nodes"
+          },
+          "path_length": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Path Length"
+          },
+          "supporting_edges": {
+            "items": {
+              "$ref": "#/components/schemas/CallGraphEdge"
+            },
+            "type": "array",
+            "title": "Supporting Edges"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entry_point",
+          "target_symbol",
+          "nodes",
+          "path_length"
+        ],
+        "title": "ReachabilityPath",
+        "description": "Concrete static call path from an entry point to a target symbol with supporting edges."
+      },
+      "ReachabilityResult": {
+        "properties": {
+          "vulnerability_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Vulnerability Id"
+          },
+          "package_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Package Id"
+          },
+          "package_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Package Name"
+          },
+          "ecosystem": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Ecosystem"
+          },
+          "candidate_symbol": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateVulnerableSymbol"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dependency_symbol_status": {
+            "$ref": "#/components/schemas/DependencySymbolResolutionStatus",
+            "default": "dependency_source_unavailable"
+          },
+          "entry_point": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Point"
+          },
+          "reachable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reachable",
+            "description": "True if static path found, False if none in supported subset, None if unresolved/incomplete/missing"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReachabilityState"
+          },
+          "path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Path"
+          },
+          "paths": {
+            "items": {
+              "$ref": "#/components/schemas/ReachabilityPath"
+            },
+            "type": "array",
+            "title": "Paths"
+          },
+          "path_length": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Length"
+          },
+          "supporting_edges": {
+            "items": {
+              "$ref": "#/components/schemas/CallGraphEdge"
+            },
+            "type": "array",
+            "title": "Supporting Edges"
+          },
+          "unresolved_calls": {
+            "items": {
+              "$ref": "#/components/schemas/UnresolvedCall"
+            },
+            "type": "array",
+            "title": "Unresolved Calls"
+          },
+          "analysis_scope": {
+            "type": "string",
+            "title": "Analysis Scope",
+            "default": "python_ast_call_graph_v1"
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisDiagnostic"
+            },
+            "type": "array",
+            "title": "Diagnostics"
+          },
+          "evidence_references": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence References"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vulnerability_id",
+          "package_name",
+          "ecosystem",
+          "state"
+        ],
+        "title": "ReachabilityResult",
+        "description": "Per-(vulnerability, package, candidate symbol) static reachability assessment."
+      },
+      "ReachabilityState": {
+        "type": "string",
+        "enum": [
+          "reachable",
+          "no_path_within_supported_subset",
+          "unresolved",
+          "analysis_incomplete",
+          "missing_candidate_symbols",
+          "target_symbol_not_found"
+        ],
+        "title": "ReachabilityState",
+        "description": "Explicit static reachability outcomes preserving scope and uncertainty."
+      },
+      "ReadinessResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "degraded"
+            ],
+            "title": "Status"
+          },
+          "storage_writable": {
+            "type": "boolean",
+            "title": "Storage Writable"
+          },
+          "output_dir_accessible": {
+            "type": "boolean",
+            "title": "Output Dir Accessible"
+          },
+          "checks": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Checks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "storage_writable",
+          "output_dir_accessible",
+          "checks"
+        ],
+        "title": "ReadinessResponse"
+      },
+      "ReassessmentPlanRequest": {
+        "properties": {
+          "current_target_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Target Path"
+          },
+          "updated_sbom_package_versions": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated Sbom Package Versions"
+          },
+          "new_advisory_vulns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Advisory Vulns"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ReassessmentPlanRequest"
+      },
+      "ReassessmentTriggerType": {
+        "type": "string",
+        "enum": [
+          "source_snapshot_drift",
+          "sbom_dependency_drift",
+          "advisory_drift",
+          "runtime_observation_added"
+        ],
+        "title": "ReassessmentTriggerType",
+        "description": "Detected change trigger requiring targeted re-evaluation."
+      },
+      "RiskIntelligenceReport": {
+        "properties": {
+          "report_id": {
+            "type": "string",
+            "title": "Report Id"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "workload_context": {
+            "$ref": "#/components/schemas/WorkloadContext"
+          },
+          "findings_scored": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Findings Scored",
+            "default": 0
+          },
+          "kev_matches": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Kev Matches",
+            "default": 0
+          },
+          "priority_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Priority Counts"
+          },
+          "assessments": {
+            "items": {
+              "$ref": "#/components/schemas/VulnerabilityRiskAssessment"
+            },
+            "type": "array",
+            "title": "Assessments"
+          },
+          "methodology_notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Methodology Notes"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RiskIntelligenceReport",
+        "description": "Assessment-wide Risk Intelligence summary ranked by priority score."
+      },
+      "RiskPriorityTier": {
+        "type": "string",
+        "enum": [
+          "P0_CRITICAL",
+          "P1_HIGH",
+          "P2_MEDIUM",
+          "P3_LOW",
+          "P4_MITIGATED"
+        ],
+        "title": "RiskPriorityTier",
+        "description": "Explainable remediation priority buckets (not exploitability verdicts)."
+      },
+      "RuntimeEvidenceReport": {
+        "properties": {
+          "report_id": {
+            "type": "string",
+            "title": "Report Id"
+          },
+          "assessment_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Assessment Id"
+          },
+          "ingested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Ingested At"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeObservationRecord"
+            },
+            "type": "array",
+            "title": "Observations"
+          },
+          "matched_vulnerability_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Matched Vulnerability Ids"
+          },
+          "instrumentation_coverage_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instrumentation Coverage Percent"
+          },
+          "instrumentation_limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Instrumentation Limitations"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assessment_id"
+        ],
+        "title": "RuntimeEvidenceReport",
+        "description": "Runtime execution trace ingestion report explicitly recording coverage gaps."
+      },
+      "RuntimeObservationInput": {
+        "properties": {
+          "qualified_symbol": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Qualified Symbol"
+          },
+          "workload_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Workload Name",
+            "default": "default-workload"
+          },
+          "container_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Container Name"
+          },
+          "image_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Digest"
+          },
+          "process_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Process Id"
+          },
+          "instrumentation_source": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Instrumentation Source"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "call_count": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Call Count",
+            "default": 1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "qualified_symbol",
+          "instrumentation_source"
+        ],
+        "title": "RuntimeObservationInput",
+        "description": "REST JSON payload for submitting runtime trace observations."
+      },
+      "RuntimeObservationRecord": {
+        "properties": {
+          "observation_id": {
+            "type": "string",
+            "title": "Observation Id"
+          },
+          "qualified_symbol": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Qualified Symbol"
+          },
+          "workload_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Workload Name",
+            "default": "default-workload"
+          },
+          "container_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Container Name"
+          },
+          "image_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Digest"
+          },
+          "process_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Process Id"
+          },
+          "instrumentation_source": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Instrumentation Source"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Observed At"
+          },
+          "call_count": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Call Count",
+            "default": 1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "qualified_symbol",
+          "instrumentation_source"
+        ],
+        "title": "RuntimeObservationRecord",
+        "description": "Confirmed function-level runtime trace observation correlated with workload identity."
+      },
+      "RuntimeObservationsIngestRequest": {
+        "properties": {
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeObservationInput"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Observations"
+          },
+          "instrumentation_coverage_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instrumentation Coverage Percent"
+          },
+          "re_evaluate_vex_and_risk": {
+            "type": "boolean",
+            "title": "Re Evaluate Vex And Risk",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "observations"
+        ],
+        "title": "RuntimeObservationsIngestRequest"
+      },
+      "ScoreFactorContribution": {
+        "properties": {
+          "factor_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Factor Name"
+          },
+          "points": {
+            "type": "number",
+            "title": "Points"
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Rationale"
+          },
+          "evidence_basis": {
+            "type": "string",
+            "title": "Evidence Basis",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "factor_name",
+          "points",
+          "rationale"
+        ],
+        "title": "ScoreFactorContribution",
+        "description": "Single deterministic factor contribution to a contextual risk score."
+      },
+      "SimulatedVulnerabilityDelta": {
+        "properties": {
+          "vulnerability_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Vulnerability Id"
+          },
+          "package_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Package Name"
+          },
+          "current_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Version"
+          },
+          "proposed_version": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Proposed Version"
+          },
+          "current_version_affected": {
+            "type": "string",
+            "title": "Current Version Affected"
+          },
+          "projected_version_affected": {
+            "type": "string",
+            "title": "Projected Version Affected"
+          },
+          "projected_status_change": {
+            "type": "string",
+            "enum": [
+              "resolved_in_advisory_ranges",
+              "remains_affected",
+              "uncertain_range_evaluation"
+            ],
+            "title": "Projected Status Change"
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vulnerability_id",
+          "package_name",
+          "proposed_version",
+          "current_version_affected",
+          "projected_version_affected",
+          "projected_status_change"
+        ],
+        "title": "SimulatedVulnerabilityDelta",
+        "description": "Projected before/after status change for a single vulnerability upon dependency upgrade."
+      },
+      "SimulationRequest": {
+        "properties": {
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/PackageUpgradeProposal"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Proposals"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "proposals"
+        ],
+        "title": "SimulationRequest"
+      },
+      "StaticReachabilityReport": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "title": "Analysis Id"
+          },
+          "analyzer_name": {
+            "type": "string",
+            "title": "Analyzer Name",
+            "default": "vexreach-python-ast"
+          },
+          "analyzer_version": {
+            "type": "string",
+            "title": "Analyzer Version",
+            "default": "0.1.0"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "python"
+          },
+          "analyzed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Analyzed At"
+          },
+          "source_snapshot_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Snapshot Hash"
+          },
+          "manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Sha256"
+          },
+          "files_discovered": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Files Discovered",
+            "default": 0
+          },
+          "files_parsed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Files Parsed",
+            "default": 0
+          },
+          "files_failed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Files Failed",
+            "default": 0
+          },
+          "graph_node_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Graph Node Count",
+            "default": 0
+          },
+          "graph_edge_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Graph Edge Count",
+            "default": 0
+          },
+          "max_graph_depth": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Max Graph Depth",
+            "default": 15
+          },
+          "max_call_paths": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Max Call Paths",
+            "default": 50
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          },
+          "vulnerabilities_analyzed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Vulnerabilities Analyzed",
+            "default": 0
+          },
+          "candidate_symbols_evaluated": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Candidate Symbols Evaluated",
+            "default": 0
+          },
+          "entry_points": {
+            "items": {
+              "$ref": "#/components/schemas/EntryPoint"
+            },
+            "type": "array",
+            "title": "Entry Points"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ReachabilityResult"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "unresolved_calls": {
+            "items": {
+              "$ref": "#/components/schemas/UnresolvedCall"
+            },
+            "type": "array",
+            "title": "Unresolved Calls"
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisDiagnostic"
+            },
+            "type": "array",
+            "title": "Diagnostics"
+          },
+          "supported_subset_notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Supported Subset Notes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "StaticReachabilityReport",
+        "description": "Complete Python static reachability analysis output for a target repository."
+      },
+      "SymbolConfidence": {
+        "type": "string",
+        "enum": [
+          "verified",
+          "high",
+          "medium",
+          "low",
+          "unverified"
+        ],
+        "title": "SymbolConfidence",
+        "description": "Confidence tier of a candidate vulnerable symbol."
+      },
+      "SymbolEvidence": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/SymbolSource"
+          },
+          "evidence_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Reference"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/SymbolConfidence",
+            "default": "unverified"
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes",
+            "default": ""
+          },
+          "verified_by_deterministic_check": {
+            "type": "boolean",
+            "title": "Verified By Deterministic Check",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source"
+        ],
+        "title": "SymbolEvidence",
+        "description": "Provenance record backing a candidate vulnerable symbol."
+      },
+      "SymbolSource": {
+        "type": "string",
+        "enum": [
+          "curated_advisory_analysis",
+          "upstream_patch_diff",
+          "maintainer_vex",
+          "ai_assisted_unverified",
+          "user_declared",
+          "other"
+        ],
+        "title": "SymbolSource",
+        "description": "Origin of a candidate vulnerable symbol assertion."
+      },
+      "TaintFlowStatus": {
+        "type": "string",
+        "enum": [
+          "tainted_flow_observed",
+          "call_path_only_taint_not_proven",
+          "sanitized_or_validated",
+          "unsupported_data_flow"
+        ],
+        "title": "TaintFlowStatus",
+        "description": "Conservative classification distinguishing static call path from data-flow proof."
+      },
+      "ThreatIntelligenceSignals": {
+        "properties": {
+          "cve_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Cve Id"
+          },
+          "epss_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Epss Score"
+          },
+          "epss_percentile": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Epss Percentile"
+          },
+          "in_cisa_kev": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In Cisa Kev"
+          },
+          "kev_date_added": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kev Date Added"
+          },
+          "kev_due_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kev Due Date"
+          },
+          "kev_known_ransomware_use": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kev Known Ransomware Use"
+          },
+          "sources_consulted": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources Consulted"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cve_id"
+        ],
+        "title": "ThreatIntelligenceSignals",
+        "description": "Retrieved external exploitation signals (EPSS and CISA KEV)."
+      },
+      "UnresolvedCall": {
+        "properties": {
+          "caller": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Caller"
+          },
+          "raw_expression": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Raw Expression"
+          },
+          "category": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Category",
+            "description": "e.g., dynamic_attribute_lookup, dynamic_import, eval_exec, ambiguous_receiver"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "location": {
+            "$ref": "#/components/schemas/CodeLocation"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "caller",
+          "raw_expression",
+          "category",
+          "reason",
+          "location"
+        ],
+        "title": "UnresolvedCall",
+        "description": "Call expression or dynamic dispatch construct that could not be statically resolved."
+      },
+      "VEXJustification": {
+        "type": "string",
+        "enum": [
+          "component_not_present",
+          "vulnerable_code_not_present",
+          "vulnerable_code_not_in_execute_path",
+          "vulnerable_code_cannot_be_controlled_by_adversary",
+          "inline_mitigations_already_exist"
+        ],
+        "title": "VEXJustification",
+        "description": "OpenVEX defined justification values for 'not_affected' status."
+      },
+      "VEXPolicyDecision": {
+        "properties": {
+          "vulnerability_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Vulnerability Id"
+          },
+          "package_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Package Name"
+          },
+          "product_identifier": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Product Identifier"
+          },
+          "decided_status": {
+            "$ref": "#/components/schemas/VEXStatus"
+          },
+          "justification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VEXJustification"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence"
+          },
+          "decision_rule": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Decision Rule"
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Rationale"
+          },
+          "supporting_evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Supporting Evidence Ids"
+          },
+          "uncertainty_notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Uncertainty Notes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vulnerability_id",
+          "package_name",
+          "product_identifier",
+          "decided_status",
+          "confidence",
+          "decision_rule",
+          "rationale"
+        ],
+        "title": "VEXPolicyDecision",
+        "description": "Auditable deterministic policy decision explaining one OpenVEX statement."
+      },
+      "VEXStatement": {
+        "properties": {
+          "vulnerability": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Vulnerability",
+            "description": "Object with 'name' (and optional '@id', 'description', 'aliases') identifying the CVE"
+          },
+          "products": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Products",
+            "description": "Identifiers (PURL strings or {'@id': ...} objects) of target products"
+          },
+          "status": {
+            "$ref": "#/components/schemas/VEXStatus"
+          },
+          "justification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VEXJustification"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "impact_statement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impact Statement"
+          },
+          "action_statement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Statement"
+          },
+          "action_statement_timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Statement Timestamp"
+          },
+          "status_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Notes"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vulnerability",
+          "products",
+          "status"
+        ],
+        "title": "VEXStatement",
+        "description": "An individual OpenVEX 0.2.0 statement asserting vulnerability status for a product."
+      },
+      "VEXStatus": {
+        "type": "string",
+        "enum": [
+          "not_affected",
+          "affected",
+          "fixed",
+          "under_investigation"
+        ],
+        "title": "VEXStatus",
+        "description": "OpenVEX defined status values."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VulnerabilityNonConflatedView": {
+        "properties": {
+          "vulnerability_id": {
+            "type": "string",
+            "title": "Vulnerability Id"
+          },
+          "canonical_id": {
+            "type": "string",
+            "title": "Canonical Id"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases"
+          },
+          "package_id": {
+            "type": "string",
+            "title": "Package Id"
+          },
+          "package_name": {
+            "type": "string",
+            "title": "Package Name"
+          },
+          "package_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Package Version"
+          },
+          "ecosystem": {
+            "type": "string",
+            "title": "Ecosystem"
+          },
+          "severity": {
+            "type": "string",
+            "title": "Severity"
+          },
+          "fixed_versions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fixed Versions"
+          },
+          "vulnerable_dependency_detected": {
+            "type": "boolean",
+            "title": "Vulnerable Dependency Detected",
+            "default": true
+          },
+          "candidate_symbol_identified": {
+            "type": "boolean",
+            "title": "Candidate Symbol Identified",
+            "default": false
+          },
+          "candidate_symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Candidate Symbols"
+          },
+          "static_path_identified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Static Path Identified"
+          },
+          "reachability_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reachability State"
+          },
+          "runtime_execution_observed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Execution Observed"
+          },
+          "analysis_incomplete": {
+            "type": "boolean",
+            "title": "Analysis Incomplete",
+            "default": false
+          },
+          "evidence_insufficient": {
+            "type": "boolean",
+            "title": "Evidence Insufficient",
+            "default": false
+          },
+          "exploitability_established": {
+            "type": "boolean",
+            "title": "Exploitability Established",
+            "default": false
+          },
+          "attack_surface": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attack Surface"
+          },
+          "data_flow_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Flow Status"
+          },
+          "contextual_risk_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contextual Risk Score"
+          },
+          "risk_priority_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Priority Tier"
+          },
+          "openvex_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openvex Status"
+          },
+          "openvex_justification": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openvex Justification"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vulnerability_id",
+          "canonical_id",
+          "package_id",
+          "package_name",
+          "ecosystem",
+          "severity"
+        ],
+        "title": "VulnerabilityNonConflatedView",
+        "description": "Strict non-conflated view preserving distinct security assessment states."
+      },
+      "VulnerabilityRiskAssessment": {
+        "properties": {
+          "vulnerability_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Vulnerability Id"
+          },
+          "package_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Package Name"
+          },
+          "ecosystem": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Ecosystem"
+          },
+          "contextual_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Contextual Score"
+          },
+          "priority_tier": {
+            "$ref": "#/components/schemas/RiskPriorityTier"
+          },
+          "vulnerable_dependency_detected": {
+            "type": "boolean",
+            "title": "Vulnerable Dependency Detected",
+            "default": true
+          },
+          "candidate_symbol_identified": {
+            "type": "boolean",
+            "title": "Candidate Symbol Identified",
+            "default": false
+          },
+          "static_path_identified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Static Path Identified"
+          },
+          "runtime_execution_observed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Execution Observed"
+          },
+          "analysis_incomplete": {
+            "type": "boolean",
+            "title": "Analysis Incomplete",
+            "default": false
+          },
+          "evidence_insufficient": {
+            "type": "boolean",
+            "title": "Evidence Insufficient",
+            "default": false
+          },
+          "exploitability_established": {
+            "type": "boolean",
+            "title": "Exploitability Established",
+            "default": false
+          },
+          "cvss_base_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cvss Base Score"
+          },
+          "threat_signals": {
+            "$ref": "#/components/schemas/ThreatIntelligenceSignals"
+          },
+          "evidence_quality": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Evidence Quality"
+          },
+          "score_breakdown": {
+            "items": {
+              "$ref": "#/components/schemas/ScoreFactorContribution"
+            },
+            "type": "array",
+            "title": "Score Breakdown"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Assumptions"
+          },
+          "score_note": {
+            "type": "string",
+            "title": "Score Note",
+            "default": "Deterministic remediation priority score [0-100]; NOT a mathematical probability of exploitation."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vulnerability_id",
+          "package_name",
+          "ecosystem",
+          "contextual_score",
+          "priority_tier",
+          "threat_signals",
+          "evidence_quality"
+        ],
+        "title": "VulnerabilityRiskAssessment",
+        "description": "Explainable risk assessment preserving separation between security facts and score."
+      },
+      "WebhookCIRequest": {
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "push",
+              "pull_request",
+              "advisory_update",
+              "manual"
+            ],
+            "title": "Event Type"
+          },
+          "repository": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Repository"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "assessment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessment Id"
+          },
+          "updated_sbom_package_versions": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated Sbom Package Versions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_type",
+          "repository"
+        ],
+        "title": "WebhookCIRequest"
+      },
+      "WebhookCIResponse": {
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "title": "Accepted"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "reassessment_plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContinuousReassessmentPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "accepted",
+          "event_type",
+          "note"
+        ],
+        "title": "WebhookCIResponse"
+      },
+      "WhatIfSimulationReport": {
+        "properties": {
+          "simulation_id": {
+            "type": "string",
+            "title": "Simulation Id"
+          },
+          "assessment_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Assessment Id"
+          },
+          "simulated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Simulated At"
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/PackageUpgradeProposal"
+            },
+            "type": "array",
+            "title": "Proposals"
+          },
+          "vulnerability_deltas": {
+            "items": {
+              "$ref": "#/components/schemas/SimulatedVulnerabilityDelta"
+            },
+            "type": "array",
+            "title": "Vulnerability Deltas"
+          },
+          "potentially_impacted_call_sites": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Potentially Impacted Call Sites"
+          },
+          "validation_status": {
+            "type": "string",
+            "enum": [
+              "pending_isolated_test_verification",
+              "advisory_check_only_no_test_run"
+            ],
+            "title": "Validation Status",
+            "default": "pending_isolated_test_verification"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assessment_id"
+        ],
+        "title": "WhatIfSimulationReport",
+        "description": "Remediation impact report explicitly requiring isolated test verification."
+      },
+      "WorkloadContext": {
+        "properties": {
+          "workload_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Workload Name",
+            "default": "default-workload"
+          },
+          "internet_facing": {
+            "type": "boolean",
+            "title": "Internet Facing",
+            "default": false
+          },
+          "criticality": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Criticality",
+            "default": "medium"
+          },
+          "mitigating_controls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Mitigating Controls"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "WorkloadContext",
+        "description": "Deployment environment metadata influencing contextual remediation priority."
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}

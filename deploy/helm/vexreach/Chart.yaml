@@ -1,0 +1,13 @@
+apiVersion: v2
+name: vexreach
+description: A Helm chart for deploying the VEXReach Backend REST API and assessment worker jobs cleanly without frontend coupling.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - security
+  - sbom
+  - openvex
+  - reachability
+  - vulnerability-intelligence
+license: Apache-2.0

@@ -1,0 +1,14 @@
+diff --git a/requests/sessions.py b/requests/sessions.py
+index 1111111..2222222 100644
+--- a/requests/sessions.py
++++ b/requests/sessions.py
+@@ -4,7 +4,8 @@
+ class Session:
+     def prepare_request(self, request):
+         return request
+ 
+-    def request(self, method, url, **kwargs):
+-        return (method, url)
++    def request(self, method, url, **kwargs):
++        # Strip Proxy-Authorization on cross-origin redirect
++        return (method, url, kwargs)

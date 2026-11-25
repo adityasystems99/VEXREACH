@@ -1,5 +1,32 @@
 """Core domain models for VEXReach."""
 
+from packages.core.models.ai_intelligence import (
+    AIAdvisoryIntelligenceReport,
+    AIAdvisoryVulnerabilityAnalysis,
+    ModifiedSymbolDiff,
+    ParsedPatchRecord,
+    PatchFetchStatus,
+    PromptInjectionSignal,
+    RejectedSymbolCandidate,
+)
+from packages.core.models.attack_path import (
+    AttackPathRecord,
+    AttackPathReport,
+    BarrierEvidence,
+    DataFlowStep,
+    ExposureSurface,
+    InputSourceRecord,
+    TaintFlowStatus,
+)
+from packages.core.models.extensions import (
+    ContinuousReassessmentPlan,
+    PackageUpgradeProposal,
+    ReassessmentTriggerType,
+    RuntimeEvidenceReport,
+    RuntimeObservationRecord,
+    SimulatedVulnerabilityDelta,
+    WhatIfSimulationReport,
+)
 from packages.core.models.base import VEXReachBaseModel
 from packages.core.models.discovery import (
     AssessmentTarget,
@@ -34,8 +61,11 @@ from packages.core.models.intelligence import (
     VulnerabilityIntelligenceReport,
 )
 from packages.core.models.openvex import (
+    EvidenceCompletenessReport,
     OpenVEXDocument,
+    OpenVEXPolicyReport,
     VEXJustification,
+    VEXPolicyDecision,
     VEXStatement,
     VEXStatus,
 )
@@ -63,6 +93,14 @@ from packages.core.models.reachability import (
     VulnerabilitySymbolEntry,
     VulnerabilitySymbolManifest,
 )
+from packages.core.models.risk import (
+    RiskIntelligenceReport,
+    RiskPriorityTier,
+    ScoreFactorContribution,
+    ThreatIntelligenceSignals,
+    VulnerabilityRiskAssessment,
+    WorkloadContext,
+)
 from packages.core.models.vulnerability import (
     NormalizedDependency,
     VulnerabilityRecord,
@@ -71,6 +109,20 @@ from packages.core.models.vulnerability import (
 
 __all__ = [
     "VEXReachBaseModel",
+    "AIAdvisoryIntelligenceReport",
+    "AIAdvisoryVulnerabilityAnalysis",
+    "ModifiedSymbolDiff",
+    "ParsedPatchRecord",
+    "PatchFetchStatus",
+    "PromptInjectionSignal",
+    "RejectedSymbolCandidate",
+    "AttackPathRecord",
+    "AttackPathReport",
+    "BarrierEvidence",
+    "DataFlowStep",
+    "ExposureSurface",
+    "InputSourceRecord",
+    "TaintFlowStatus",
     "AssessmentTarget",
     "CVSSMetric",
     "DependencyScope",
@@ -124,6 +176,22 @@ __all__ = [
     "VulnerabilitySymbolManifest",
     "VEXStatus",
     "VEXJustification",
+    "VEXPolicyDecision",
     "VEXStatement",
+    "EvidenceCompletenessReport",
     "OpenVEXDocument",
+    "OpenVEXPolicyReport",
+    "RiskIntelligenceReport",
+    "RiskPriorityTier",
+    "ScoreFactorContribution",
+    "ThreatIntelligenceSignals",
+    "VulnerabilityRiskAssessment",
+    "WorkloadContext",
+    "ContinuousReassessmentPlan",
+    "PackageUpgradeProposal",
+    "ReassessmentTriggerType",
+    "RuntimeEvidenceReport",
+    "RuntimeObservationRecord",
+    "SimulatedVulnerabilityDelta",
+    "WhatIfSimulationReport",
 ]

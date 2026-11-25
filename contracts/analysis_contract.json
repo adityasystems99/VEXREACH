@@ -1,0 +1,1018 @@
+{
+  "": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VEXReach Cross-Language Static Reachability Analysis Contract",
+  "contract_version": "1.0.0",
+  "schemas": {
+    "StaticReachabilityReport": {
+      "$defs": {
+        "AnalysisDiagnostic": {
+          "additionalProperties": false,
+          "description": "Structured diagnostic explaining analysis limitations, errors, or truncation.",
+          "properties": {
+            "code": {
+              "minLength": 1,
+              "title": "Code",
+              "type": "string"
+            },
+            "severity": {
+              "default": "warning",
+              "enum": [
+                "info",
+                "warning",
+                "error"
+              ],
+              "title": "Severity",
+              "type": "string"
+            },
+            "message": {
+              "minLength": 1,
+              "title": "Message",
+              "type": "string"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CodeLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "construct_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Construct Kind"
+            },
+            "affected_scope": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Affected Scope"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "AnalysisDiagnostic",
+          "type": "object"
+        },
+        "CallGraphEdge": {
+          "additionalProperties": false,
+          "description": "Directed call edge with provenance and all observed source call sites.",
+          "properties": {
+            "caller": {
+              "minLength": 1,
+              "title": "Caller",
+              "type": "string"
+            },
+            "callee": {
+              "minLength": 1,
+              "title": "Callee",
+              "type": "string"
+            },
+            "resolution_method": {
+              "minLength": 1,
+              "title": "Resolution Method",
+              "type": "string"
+            },
+            "source_locations": {
+              "items": {
+                "$ref": "#/$defs/CodeLocation"
+              },
+              "title": "Source Locations",
+              "type": "array"
+            }
+          },
+          "required": [
+            "caller",
+            "callee",
+            "resolution_method"
+          ],
+          "title": "CallGraphEdge",
+          "type": "object"
+        },
+        "CandidateVulnerableSymbol": {
+          "additionalProperties": false,
+          "description": "A single candidate vulnerable symbol targeted by static reachability analysis.",
+          "properties": {
+            "module": {
+              "minLength": 1,
+              "title": "Module",
+              "type": "string"
+            },
+            "qualified_name": {
+              "minLength": 1,
+              "title": "Qualified Name",
+              "type": "string"
+            },
+            "symbol_type": {
+              "default": "function",
+              "enum": [
+                "function",
+                "method",
+                "class",
+                "attribute"
+              ],
+              "title": "Symbol Type",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/SymbolSource"
+            },
+            "evidence_reference": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Evidence Reference"
+            },
+            "confidence": {
+              "$ref": "#/$defs/SymbolConfidence",
+              "default": "unverified"
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SymbolEvidence"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "module",
+            "qualified_name",
+            "source"
+          ],
+          "title": "CandidateVulnerableSymbol",
+          "type": "object"
+        },
+        "CodeLocation": {
+          "additionalProperties": false,
+          "description": "Portable repository-relative source code location.",
+          "properties": {
+            "file": {
+              "description": "Repository-relative POSIX path",
+              "minLength": 1,
+              "title": "File",
+              "type": "string"
+            },
+            "line": {
+              "minimum": 1,
+              "title": "Line",
+              "type": "integer"
+            },
+            "column": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Column",
+              "type": "integer"
+            },
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            }
+          },
+          "required": [
+            "file",
+            "line"
+          ],
+          "title": "CodeLocation",
+          "type": "object"
+        },
+        "DependencySymbolResolutionStatus": {
+          "description": "Resolution status of a candidate vulnerable symbol in dependency metadata/sources.",
+          "enum": [
+            "verified_in_dependency_source",
+            "not_found_in_dependency_source",
+            "dependency_source_unavailable",
+            "import_mapping_ambiguous",
+            "unsupported_symbol_structure"
+          ],
+          "title": "DependencySymbolResolutionStatus",
+          "type": "string"
+        },
+        "EntryPoint": {
+          "additionalProperties": false,
+          "description": "Identified application entry point used as a traversal root.",
+          "properties": {
+            "qualified_name": {
+              "minLength": 1,
+              "title": "Qualified Name",
+              "type": "string"
+            },
+            "module": {
+              "minLength": 1,
+              "title": "Module",
+              "type": "string"
+            },
+            "source": {
+              "description": "user_config, python_main_block, fastapi_route, etc.",
+              "minLength": 1,
+              "title": "Source",
+              "type": "string"
+            },
+            "confidence": {
+              "default": "verified",
+              "enum": [
+                "verified",
+                "candidate",
+                "unresolved"
+              ],
+              "title": "Confidence",
+              "type": "string"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CodeLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "metadata": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Metadata",
+              "type": "object"
+            }
+          },
+          "required": [
+            "qualified_name",
+            "module",
+            "source"
+          ],
+          "title": "EntryPoint",
+          "type": "object"
+        },
+        "ReachabilityPath": {
+          "additionalProperties": false,
+          "description": "Concrete static call path from an entry point to a target symbol with supporting edges.",
+          "properties": {
+            "entry_point": {
+              "minLength": 1,
+              "title": "Entry Point",
+              "type": "string"
+            },
+            "target_symbol": {
+              "minLength": 1,
+              "title": "Target Symbol",
+              "type": "string"
+            },
+            "nodes": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 2,
+              "title": "Nodes",
+              "type": "array"
+            },
+            "path_length": {
+              "minimum": 1,
+              "title": "Path Length",
+              "type": "integer"
+            },
+            "supporting_edges": {
+              "items": {
+                "$ref": "#/$defs/CallGraphEdge"
+              },
+              "title": "Supporting Edges",
+              "type": "array"
+            }
+          },
+          "required": [
+            "entry_point",
+            "target_symbol",
+            "nodes",
+            "path_length"
+          ],
+          "title": "ReachabilityPath",
+          "type": "object"
+        },
+        "ReachabilityResult": {
+          "additionalProperties": false,
+          "description": "Per-(vulnerability, package, candidate symbol) static reachability assessment.",
+          "properties": {
+            "vulnerability_id": {
+              "minLength": 1,
+              "title": "Vulnerability Id",
+              "type": "string"
+            },
+            "package_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Package Id"
+            },
+            "package_name": {
+              "minLength": 1,
+              "title": "Package Name",
+              "type": "string"
+            },
+            "ecosystem": {
+              "minLength": 1,
+              "title": "Ecosystem",
+              "type": "string"
+            },
+            "candidate_symbol": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CandidateVulnerableSymbol"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "dependency_symbol_status": {
+              "$ref": "#/$defs/DependencySymbolResolutionStatus",
+              "default": "dependency_source_unavailable"
+            },
+            "entry_point": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Entry Point"
+            },
+            "reachable": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "True if static path found, False if none in supported subset, None if unresolved/incomplete/missing",
+              "title": "Reachable"
+            },
+            "state": {
+              "$ref": "#/$defs/ReachabilityState"
+            },
+            "path": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Path",
+              "type": "array"
+            },
+            "paths": {
+              "items": {
+                "$ref": "#/$defs/ReachabilityPath"
+              },
+              "title": "Paths",
+              "type": "array"
+            },
+            "path_length": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Path Length"
+            },
+            "supporting_edges": {
+              "items": {
+                "$ref": "#/$defs/CallGraphEdge"
+              },
+              "title": "Supporting Edges",
+              "type": "array"
+            },
+            "unresolved_calls": {
+              "items": {
+                "$ref": "#/$defs/UnresolvedCall"
+              },
+              "title": "Unresolved Calls",
+              "type": "array"
+            },
+            "analysis_scope": {
+              "default": "python_ast_call_graph_v1",
+              "title": "Analysis Scope",
+              "type": "string"
+            },
+            "diagnostics": {
+              "items": {
+                "$ref": "#/$defs/AnalysisDiagnostic"
+              },
+              "title": "Diagnostics",
+              "type": "array"
+            },
+            "evidence_references": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Evidence References",
+              "type": "array"
+            }
+          },
+          "required": [
+            "vulnerability_id",
+            "package_name",
+            "ecosystem",
+            "state"
+          ],
+          "title": "ReachabilityResult",
+          "type": "object"
+        },
+        "ReachabilityState": {
+          "description": "Explicit static reachability outcomes preserving scope and uncertainty.",
+          "enum": [
+            "reachable",
+            "no_path_within_supported_subset",
+            "unresolved",
+            "analysis_incomplete",
+            "missing_candidate_symbols",
+            "target_symbol_not_found"
+          ],
+          "title": "ReachabilityState",
+          "type": "string"
+        },
+        "SymbolConfidence": {
+          "description": "Confidence tier of a candidate vulnerable symbol.",
+          "enum": [
+            "verified",
+            "high",
+            "medium",
+            "low",
+            "unverified"
+          ],
+          "title": "SymbolConfidence",
+          "type": "string"
+        },
+        "SymbolEvidence": {
+          "additionalProperties": false,
+          "description": "Provenance record backing a candidate vulnerable symbol.",
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/SymbolSource"
+            },
+            "evidence_reference": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Evidence Reference"
+            },
+            "confidence": {
+              "$ref": "#/$defs/SymbolConfidence",
+              "default": "unverified"
+            },
+            "notes": {
+              "default": "",
+              "title": "Notes",
+              "type": "string"
+            },
+            "verified_by_deterministic_check": {
+              "default": false,
+              "title": "Verified By Deterministic Check",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "title": "SymbolEvidence",
+          "type": "object"
+        },
+        "SymbolSource": {
+          "description": "Origin of a candidate vulnerable symbol assertion.",
+          "enum": [
+            "curated_advisory_analysis",
+            "upstream_patch_diff",
+            "maintainer_vex",
+            "ai_assisted_unverified",
+            "user_declared",
+            "other"
+          ],
+          "title": "SymbolSource",
+          "type": "string"
+        },
+        "UnresolvedCall": {
+          "additionalProperties": false,
+          "description": "Call expression or dynamic dispatch construct that could not be statically resolved.",
+          "properties": {
+            "caller": {
+              "minLength": 1,
+              "title": "Caller",
+              "type": "string"
+            },
+            "raw_expression": {
+              "minLength": 1,
+              "title": "Raw Expression",
+              "type": "string"
+            },
+            "category": {
+              "description": "e.g., dynamic_attribute_lookup, dynamic_import, eval_exec, ambiguous_receiver",
+              "minLength": 1,
+              "title": "Category",
+              "type": "string"
+            },
+            "reason": {
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "location": {
+              "$ref": "#/$defs/CodeLocation"
+            }
+          },
+          "required": [
+            "caller",
+            "raw_expression",
+            "category",
+            "reason",
+            "location"
+          ],
+          "title": "UnresolvedCall",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Complete Python static reachability analysis output for a target repository.",
+      "properties": {
+        "analysis_id": {
+          "title": "Analysis Id",
+          "type": "string"
+        },
+        "analyzer_name": {
+          "default": "vexreach-python-ast",
+          "title": "Analyzer Name",
+          "type": "string"
+        },
+        "analyzer_version": {
+          "default": "0.1.0",
+          "title": "Analyzer Version",
+          "type": "string"
+        },
+        "language": {
+          "default": "python",
+          "title": "Language",
+          "type": "string"
+        },
+        "analyzed_at": {
+          "format": "date-time",
+          "title": "Analyzed At",
+          "type": "string"
+        },
+        "source_snapshot_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Snapshot Hash"
+        },
+        "manifest_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Manifest Sha256"
+        },
+        "files_discovered": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Files Discovered",
+          "type": "integer"
+        },
+        "files_parsed": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Files Parsed",
+          "type": "integer"
+        },
+        "files_failed": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Files Failed",
+          "type": "integer"
+        },
+        "graph_node_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Graph Node Count",
+          "type": "integer"
+        },
+        "graph_edge_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Graph Edge Count",
+          "type": "integer"
+        },
+        "max_graph_depth": {
+          "default": 15,
+          "minimum": 1,
+          "title": "Max Graph Depth",
+          "type": "integer"
+        },
+        "max_call_paths": {
+          "default": 50,
+          "minimum": 1,
+          "title": "Max Call Paths",
+          "type": "integer"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "vulnerabilities_analyzed": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Vulnerabilities Analyzed",
+          "type": "integer"
+        },
+        "candidate_symbols_evaluated": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Candidate Symbols Evaluated",
+          "type": "integer"
+        },
+        "entry_points": {
+          "items": {
+            "$ref": "#/$defs/EntryPoint"
+          },
+          "title": "Entry Points",
+          "type": "array"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/ReachabilityResult"
+          },
+          "title": "Results",
+          "type": "array"
+        },
+        "unresolved_calls": {
+          "items": {
+            "$ref": "#/$defs/UnresolvedCall"
+          },
+          "title": "Unresolved Calls",
+          "type": "array"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/AnalysisDiagnostic"
+          },
+          "title": "Diagnostics",
+          "type": "array"
+        },
+        "supported_subset_notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Supported Subset Notes",
+          "type": "array"
+        }
+      },
+      "title": "StaticReachabilityReport",
+      "type": "object"
+    },
+    "VulnerabilitySymbolManifest": {
+      "$defs": {
+        "CandidateVulnerableSymbol": {
+          "additionalProperties": false,
+          "description": "A single candidate vulnerable symbol targeted by static reachability analysis.",
+          "properties": {
+            "module": {
+              "minLength": 1,
+              "title": "Module",
+              "type": "string"
+            },
+            "qualified_name": {
+              "minLength": 1,
+              "title": "Qualified Name",
+              "type": "string"
+            },
+            "symbol_type": {
+              "default": "function",
+              "enum": [
+                "function",
+                "method",
+                "class",
+                "attribute"
+              ],
+              "title": "Symbol Type",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/SymbolSource"
+            },
+            "evidence_reference": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Evidence Reference"
+            },
+            "confidence": {
+              "$ref": "#/$defs/SymbolConfidence",
+              "default": "unverified"
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SymbolEvidence"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "module",
+            "qualified_name",
+            "source"
+          ],
+          "title": "CandidateVulnerableSymbol",
+          "type": "object"
+        },
+        "SymbolConfidence": {
+          "description": "Confidence tier of a candidate vulnerable symbol.",
+          "enum": [
+            "verified",
+            "high",
+            "medium",
+            "low",
+            "unverified"
+          ],
+          "title": "SymbolConfidence",
+          "type": "string"
+        },
+        "SymbolEvidence": {
+          "additionalProperties": false,
+          "description": "Provenance record backing a candidate vulnerable symbol.",
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/SymbolSource"
+            },
+            "evidence_reference": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Evidence Reference"
+            },
+            "confidence": {
+              "$ref": "#/$defs/SymbolConfidence",
+              "default": "unverified"
+            },
+            "notes": {
+              "default": "",
+              "title": "Notes",
+              "type": "string"
+            },
+            "verified_by_deterministic_check": {
+              "default": false,
+              "title": "Verified By Deterministic Check",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "title": "SymbolEvidence",
+          "type": "object"
+        },
+        "SymbolPackageTarget": {
+          "additionalProperties": false,
+          "description": "Package identity associated with a vulnerability symbol manifest entry.",
+          "properties": {
+            "ecosystem": {
+              "minLength": 1,
+              "title": "Ecosystem",
+              "type": "string"
+            },
+            "name": {
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Version"
+            },
+            "purl": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Purl"
+            },
+            "import_names": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Import Names",
+              "type": "array"
+            }
+          },
+          "required": [
+            "ecosystem",
+            "name"
+          ],
+          "title": "SymbolPackageTarget",
+          "type": "object"
+        },
+        "SymbolSource": {
+          "description": "Origin of a candidate vulnerable symbol assertion.",
+          "enum": [
+            "curated_advisory_analysis",
+            "upstream_patch_diff",
+            "maintainer_vex",
+            "ai_assisted_unverified",
+            "user_declared",
+            "other"
+          ],
+          "title": "SymbolSource",
+          "type": "string"
+        },
+        "VulnerabilitySymbolEntry": {
+          "additionalProperties": false,
+          "description": "Mapping from a vulnerability & package to zero or more candidate vulnerable symbols.",
+          "properties": {
+            "vulnerability_id": {
+              "minLength": 1,
+              "title": "Vulnerability Id",
+              "type": "string"
+            },
+            "package": {
+              "$ref": "#/$defs/SymbolPackageTarget"
+            },
+            "symbols": {
+              "items": {
+                "$ref": "#/$defs/CandidateVulnerableSymbol"
+              },
+              "title": "Symbols",
+              "type": "array"
+            }
+          },
+          "required": [
+            "vulnerability_id",
+            "package"
+          ],
+          "title": "VulnerabilitySymbolEntry",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Validated collection of candidate vulnerable symbol mappings.",
+      "properties": {
+        "manifest_version": {
+          "default": "1.0",
+          "minLength": 1,
+          "title": "Manifest Version",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/VulnerabilitySymbolEntry"
+          },
+          "title": "Entries",
+          "type": "array"
+        }
+      },
+      "title": "VulnerabilitySymbolManifest",
+      "type": "object"
+    },
+    "EntryPointConfig": {
+      "$defs": {
+        "EntryPointRule": {
+          "additionalProperties": false,
+          "description": "User-declared entry point configuration item.",
+          "properties": {
+            "module": {
+              "minLength": 1,
+              "title": "Module",
+              "type": "string"
+            },
+            "qualified_name": {
+              "minLength": 1,
+              "title": "Qualified Name",
+              "type": "string"
+            },
+            "source": {
+              "default": "user_config",
+              "minLength": 1,
+              "title": "Source",
+              "type": "string"
+            }
+          },
+          "required": [
+            "module",
+            "qualified_name"
+          ],
+          "title": "EntryPointRule",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Validated explicit entry-point configuration file model.",
+      "properties": {
+        "entry_points": {
+          "items": {
+            "$ref": "#/$defs/EntryPointRule"
+          },
+          "title": "Entry Points",
+          "type": "array"
+        }
+      },
+      "title": "EntryPointConfig",
+      "type": "object"
+    }
+  }
+}

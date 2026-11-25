@@ -8,9 +8,14 @@ from uuid import uuid4
 
 from pydantic import Field, field_validator, model_validator
 
+from packages.core.models.ai_intelligence import AIAdvisoryIntelligenceReport
+from packages.core.models.attack_path import AttackPathReport
 from packages.core.models.base import VEXReachBaseModel
+from packages.core.models.extensions import RuntimeEvidenceReport
 from packages.core.models.intelligence import VulnerabilityIntelligenceReport
+from packages.core.models.openvex import OpenVEXPolicyReport
 from packages.core.models.reachability import StaticReachabilityReport
+from packages.core.models.risk import RiskIntelligenceReport
 
 
 def _coerce_path_to_str(value: Any) -> Any:
@@ -236,9 +241,29 @@ class DiscoveryResult(VEXReachBaseModel):
         default=None,
         description="Enriched OSV vulnerability intelligence report when enrichment is enabled",
     )
+    ai_intelligence: AIAdvisoryIntelligenceReport | None = Field(
+        default=None,
+        description="AI-assisted advisory & patch symbol intelligence report when enabled",
+    )
     reachability: StaticReachabilityReport | None = Field(
         default=None,
         description="Static reachability analysis report when static analysis is executed",
+    )
+    attack_paths: AttackPathReport | None = Field(
+        default=None,
+        description="Conservative Attack Path Intelligence report when attack-path analysis runs",
+    )
+    risk_assessment: RiskIntelligenceReport | None = Field(
+        default=None,
+        description="Explainable Risk Intelligence report correlating CVSS, EPSS, KEV, and reachability",
+    )
+    runtime_evidence: RuntimeEvidenceReport | None = Field(
+        default=None,
+        description="Correlated runtime trace observations and coverage bounds",
+    )
+    policy_evaluation: OpenVEXPolicyReport | None = Field(
+        default=None,
+        description="Deterministic OpenVEX 0.2.0 policy evaluation & emitted statements report",
     )
     warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)

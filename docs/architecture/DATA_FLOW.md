@@ -93,23 +93,14 @@ sequenceDiagram
   ```
 - *(Phase 4 Implemented)*: `IntelligenceOrchestrator` enriches `DiscoveryResult` via `OSVClient` (`/v1/querybatch` + `/v1/vulns/{id}`), caches advisories in `SQLiteAdvisoryCache`, runs `VulnerabilityCorrelator` and `VersionRangeEvaluator` (PEP 440 / SemVer 2.0.0), persists `raw-osv-responses.json`, and attaches `VulnerabilityIntelligenceReport` onto `DiscoveryResult.intelligence` without discarding original scanner records.
 
-### Stage 2: Function-Level Vulnerability Identification
-- **Input**: `VulnerabilityRecord` + upstream Git commits/patches.
+### Stage 2: Function-Level Vulnerability Identification *(Implemented — Milestone 3)*
+- **Input**: `DiscoveryResult` + upstream commit/patch diffs + optional local dependency ASTs + quarantined LLM extraction.
 - **Transformation**:
-  - Upstream patch diffs are inspected.
-  - Tree-sitter AST comparisons identify modified functions and methods.
-  - LLM heuristic agent structures and validates symbol signatures (with fallback to advisory regex matching).
-- **Output Data Model**:
-  ```python
-  class VulnerableSymbolSignature(BaseModel):
-      cve_id: str
-      package_name: str
-      module_path: str
-      symbol_name: str # e.g. "urllib3.util.parse_url" or "yaml.load"
-      signature_type: Literal["function", "method", "class"]
-      confidence: float # [0.0 - 1.0]
-      provenance_source: str # commit URL, advisory reference
-  ```
+  - `PatchFetcher` retrieves local or allowlisted HTTPS commit diffs with SSRF checks and SHA-256 digests.
+  - `patch_parser` extracts unified diff hunks and compares Python ASTs (before/after or dependency line alignment).
+  - `PromptSanitizer` isolates untrusted advisory/patch content and strips disallowed LLM security verdict claims.
+  - `CandidateSymbolValidator` validates syntax, package import roots, and dependency AST presence (`CandidateVulnerableSymbol`).
+- **Output Data Model**: `AIAdvisoryIntelligenceReport` (`packages/core/models/ai_intelligence.py`) generating validated `VulnerabilitySymbolManifest`, persisted to `ai-intelligence.json`, `raw-patch-evidence.json`, and `candidate-symbols.json`.
 
 ### Stage 3: Static Call Graph & Reachability Evaluation *(Python AST Implemented — Phase 5)*
 - **Input**: Application Source Code AST + `VulnerabilitySymbolManifest` (+ optional `EntryPointConfig` & local `--dependency-source`).
@@ -123,41 +114,20 @@ sequenceDiagram
   - `ReachabilityState`: `reachable`, `no_path_within_supported_subset`, `unresolved`, `analysis_incomplete`, `missing_candidate_symbols`, `target_symbol_not_found`.
   - `StaticReachabilityReport` attached optionally to `DiscoveryResult.reachability`, with standalone `reachability-analysis.json`, `call-graph.json`, `candidate-symbols.json`, and SHA-256 `provenance.json`.
 
-### Stage 4: Attack Path Modeling
-- **Input**: `ReachabilityEvidence` + Application Route Context.
+### Stage 4: Attack Path Modeling *(Implemented — Milestone 4)*
+- **Input**: `StaticReachabilityReport` (`REACHABLE` paths) + Python AST `FunctionSymbol`s.
 - **Transformation**:
-  - Maps ingress entry points to network interfaces (e.g., `POST /api/v1/upload`).
-  - Checks middleware stack for authentication/authorization decorators (`@login_required`, `@authenticate`).
-  - Traces user-controlled argument propagation to vulnerable function invocations.
-- **Output Data Model**:
-  ```python
-  class AttackPathRecord(BaseModel):
-      ingress_point: str
-      is_network_exposed: bool
-      requires_authentication: bool
-      path_hops: list[str]
-      assumptions: list[str]
-      missing_evidence: list[str]
-  ```
+  - `classify_entry_surface` classifies ingress (`network_http_public`, `network_http_authenticated`, `cli_local_input`, `internal_function`) and inspects auth decorators / FastAPI `Depends` parameters.
+  - `trace_taint_along_path` propagates tainted parameters and ambient inputs across AST hops, recording `tainted_flow_observed`, `call_path_only_taint_not_proven`, or `sanitized_or_validated`.
+- **Output Data Model**: `AttackPathReport` & `AttackPathRecord` (`packages/core/models/attack_path.py`) persisted to `attack-paths.json`.
 
-### Stage 5: Deterministic Policy Evaluation & OpenVEX Emission
-- **Input**: Correlated findings (`VulnerabilityRecord`, `ReachabilityEvidence`, `AttackPathRecord`, `RiskAssessment`).
-- **Policy Rules**:
-  1. If `ReachabilityStatus == REACHABLE`:
-     - Status: `affected`
-     - Action: Remediation required (upgrade or patch).
-  2. If `ReachabilityStatus == UNREACHABLE` AND `len(unresolved_dynamic_calls) == 0`:
-     - Status: `not_affected`
-     - Justification: `vulnerable_code_not_in_execute_path`
-     - Impact Statement: "Static call graph analysis of all entry points revealed no execution path to candidate vulnerable functions."
-  3. If `ReachabilityStatus == DYNAMIC_UNCERTAINTY` OR `len(unresolved_dynamic_calls) > 0`:
-     - Status: `under_investigation`
-     - Justification: None (investigation in progress).
-     - Impact Statement: "Dynamic dispatch or runtime reflection detected. Automated static reachability cannot guarantee unreachable status."
-  4. If `package.version >= vulnerability.fixed_version`:
-     - Status: `fixed`
-     - Justification: None.
-- **Output Data Model**: OpenVEX 0.2.0 document serialized to JSON-LD.
+### Stage 5: Deterministic Policy Evaluation & OpenVEX Emission *(Implemented — Milestone 5)*
+- **Input**: `DiscoveryResult` (dependencies, SBOM, OSV intelligence, static reachability, attack paths, optional runtime observations).
+- **Policy Rules (`packages/core/policies/vex_policy.py`)**:
+  1. `REACHABLE` path or confirmed runtime observation -> `affected` (`action_statement` + fix hints).
+  2. Advisory-vs-scanner conflict, incomplete SBOM/scan, missing/unverified dependency symbols, dynamic unresolved calls, or truncated/incomplete static analysis -> `under_investigation`.
+  3. Complete `NO_PATH_WITHIN_SUPPORTED_SUBSET` + `VERIFIED_IN_DEPENDENCY_SOURCE` + complete SBOM/scan + zero unresolved calls + conflict-free intelligence -> `not_affected` (`vulnerable_code_not_in_execute_path`).
+- **Output Data Model**: Validated `OpenVEXDocument` (`openvex.vex.json`), `OpenVEXPolicyReport` (`policy-evaluation.json`), and SQLite revision history (`SQLiteVEXStore`).
 
 ---
 

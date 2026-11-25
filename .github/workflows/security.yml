@@ -1,0 +1,59 @@
+name: Security & Self-Provenance Checks
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  self-security-and-sbom:
+    name: Self-SBOM, Provenance & Secret Hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install VEXReach in isolated venv
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Check secret hygiene, OpenAPI contract freshness & Benchmarks
+        run: |
+          python -c "import json; from apps.api.main import create_app; create_app().openapi(); print('OpenAPI v1 schema OK')"
+          python scripts/generate_release_provenance.py --output provenance-check.json
+          python benchmarks/run_python_benchmark.py --output-json benchmark-report.json
+          python benchmarks/run_go_benchmark.py --output-json go-benchmark-report.json
+
+      - name: Install Trivy and generate self-SBOM + vuln report
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "cyclonedx"
+          output: "vexreach-self.cdx.json"
+
+      - name: Upload self-security artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vexreach-self-security-artifacts
+          path: |
+            vexreach-self.cdx.json
+            provenance-check.json
+            benchmark-report.json
+            go-benchmark-report.json

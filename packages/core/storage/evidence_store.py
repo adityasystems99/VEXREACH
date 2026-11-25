@@ -25,6 +25,12 @@ class AssessmentArtifacts:
     reachability_analysis_path: Path | None = None
     call_graph_path: Path | None = None
     candidate_symbols_path: Path | None = None
+    ai_intelligence_path: Path | None = None
+    raw_patch_evidence_path: Path | None = None
+    attack_paths_path: Path | None = None
+    openvex_path: Path | None = None
+    policy_evaluation_path: Path | None = None
+    risk_assessment_path: Path | None = None
 
 
 class EvidenceStore:
@@ -105,6 +111,94 @@ class EvidenceStore:
 
         return hashes
 
+    def persist_ai_intelligence_artifacts(
+        self,
+        artifacts: AssessmentArtifacts,
+        report: Any,
+        *,
+        raw_patch_payloads: list[dict[str, Any]] | None = None,
+    ) -> dict[str, str]:
+        """Persist AI Security Intelligence report, raw patch evidence, and candidate manifest."""
+        artifacts.assessment_dir.mkdir(parents=True, exist_ok=True)
+        hashes: dict[str, str] = {}
+
+        if raw_patch_payloads is not None:
+            patch_path = artifacts.raw_patch_evidence_path or safe_resolve_path(
+                artifacts.assessment_dir, "raw-patch-evidence.json"
+            )
+            patch_path.write_text(
+                json.dumps(raw_patch_payloads, indent=2), encoding="utf-8"
+            )
+            patch_hash = calculate_file_sha256(patch_path)
+            hashes["raw-patch-evidence.json"] = patch_hash
+            report.raw_patch_evidence_path = str(patch_path)
+            report.raw_patch_evidence_sha256 = patch_hash
+
+        ai_path = artifacts.ai_intelligence_path or safe_resolve_path(
+            artifacts.assessment_dir, "ai-intelligence.json"
+        )
+        ai_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        hashes["ai-intelligence.json"] = calculate_file_sha256(ai_path)
+
+        sym_path = artifacts.candidate_symbols_path or safe_resolve_path(
+            artifacts.assessment_dir, "candidate-symbols.json"
+        )
+        sym_path.write_text(
+            report.generated_manifest.model_dump_json(indent=2), encoding="utf-8"
+        )
+        hashes["candidate-symbols.json"] = calculate_file_sha256(sym_path)
+        return hashes
+
+    def persist_attack_path_artifacts(
+        self,
+        artifacts: AssessmentArtifacts,
+        report: Any,
+    ) -> dict[str, str]:
+        """Persist Attack Path Intelligence report to attack-paths.json and return SHA-256 hash."""
+        artifacts.assessment_dir.mkdir(parents=True, exist_ok=True)
+        path = artifacts.attack_paths_path or safe_resolve_path(
+            artifacts.assessment_dir, "attack-paths.json"
+        )
+        path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        return {"attack-paths.json": calculate_file_sha256(path)}
+
+    def persist_openvex_artifacts(
+        self,
+        artifacts: AssessmentArtifacts,
+        policy_report: Any,
+    ) -> dict[str, str]:
+        """Persist validated OpenVEX 0.2.0 JSON-LD document and policy audit report."""
+        artifacts.assessment_dir.mkdir(parents=True, exist_ok=True)
+        hashes: dict[str, str] = {}
+
+        vex_path = artifacts.openvex_path or safe_resolve_path(
+            artifacts.assessment_dir, "openvex.vex.json"
+        )
+        vex_path.write_text(
+            policy_report.openvex_document.to_openvex_json(), encoding="utf-8"
+        )
+        hashes["openvex.vex.json"] = calculate_file_sha256(vex_path)
+
+        policy_path = artifacts.policy_evaluation_path or safe_resolve_path(
+            artifacts.assessment_dir, "policy-evaluation.json"
+        )
+        policy_path.write_text(policy_report.model_dump_json(indent=2), encoding="utf-8")
+        hashes["policy-evaluation.json"] = calculate_file_sha256(policy_path)
+        return hashes
+
+    def persist_risk_artifacts(
+        self,
+        artifacts: AssessmentArtifacts,
+        risk_report: Any,
+    ) -> dict[str, str]:
+        """Persist Risk Intelligence report to risk-assessment.json and return SHA-256 hash."""
+        artifacts.assessment_dir.mkdir(parents=True, exist_ok=True)
+        path = artifacts.risk_assessment_path or safe_resolve_path(
+            artifacts.assessment_dir, "risk-assessment.json"
+        )
+        path.write_text(risk_report.model_dump_json(indent=2), encoding="utf-8")
+        return {"risk-assessment.json": calculate_file_sha256(path)}
+
     @staticmethod
     def _build_artifacts(assessment_dir: Path) -> AssessmentArtifacts:
         return AssessmentArtifacts(
@@ -120,6 +214,24 @@ class EvidenceStore:
             call_graph_path=safe_resolve_path(assessment_dir, "call-graph.json"),
             candidate_symbols_path=safe_resolve_path(
                 assessment_dir, "candidate-symbols.json"
+            ),
+            ai_intelligence_path=safe_resolve_path(
+                assessment_dir, "ai-intelligence.json"
+            ),
+            raw_patch_evidence_path=safe_resolve_path(
+                assessment_dir, "raw-patch-evidence.json"
+            ),
+            attack_paths_path=safe_resolve_path(
+                assessment_dir, "attack-paths.json"
+            ),
+            openvex_path=safe_resolve_path(
+                assessment_dir, "openvex.vex.json"
+            ),
+            policy_evaluation_path=safe_resolve_path(
+                assessment_dir, "policy-evaluation.json"
+            ),
+            risk_assessment_path=safe_resolve_path(
+                assessment_dir, "risk-assessment.json"
             ),
         )
 
@@ -180,6 +292,45 @@ class EvidenceStore:
             evidence_hashes["candidate-symbols.json"] = calculate_file_sha256(
                 artifacts.candidate_symbols_path
             )
+        if (
+            artifacts.ai_intelligence_path is not None
+            and artifacts.ai_intelligence_path.is_file()
+        ):
+            evidence_hashes["ai-intelligence.json"] = calculate_file_sha256(
+                artifacts.ai_intelligence_path
+            )
+        if (
+            artifacts.raw_patch_evidence_path is not None
+            and artifacts.raw_patch_evidence_path.is_file()
+        ):
+            evidence_hashes["raw-patch-evidence.json"] = calculate_file_sha256(
+                artifacts.raw_patch_evidence_path
+            )
+        if (
+            artifacts.attack_paths_path is not None
+            and artifacts.attack_paths_path.is_file()
+        ):
+            evidence_hashes["attack-paths.json"] = calculate_file_sha256(
+                artifacts.attack_paths_path
+            )
+        if artifacts.openvex_path is not None and artifacts.openvex_path.is_file():
+            evidence_hashes["openvex.vex.json"] = calculate_file_sha256(
+                artifacts.openvex_path
+            )
+        if (
+            artifacts.policy_evaluation_path is not None
+            and artifacts.policy_evaluation_path.is_file()
+        ):
+            evidence_hashes["policy-evaluation.json"] = calculate_file_sha256(
+                artifacts.policy_evaluation_path
+            )
+        if (
+            artifacts.risk_assessment_path is not None
+            and artifacts.risk_assessment_path.is_file()
+        ):
+            evidence_hashes["risk-assessment.json"] = calculate_file_sha256(
+                artifacts.risk_assessment_path
+            )
 
         result.scan_metadata.evidence_hashes = dict(evidence_hashes)
 
@@ -222,6 +373,49 @@ class EvidenceStore:
             )
             provenance_payload["source_snapshot_hash"] = (
                 result.reachability.source_snapshot_hash
+            )
+        if result.ai_intelligence is not None:
+            provenance_payload["ai_intelligence_provider"] = (
+                result.ai_intelligence.llm_provider
+            )
+            provenance_payload["ai_intelligence_generated_at"] = (
+                result.ai_intelligence.generated_at.isoformat()
+            )
+            provenance_payload["ai_candidates_accepted"] = (
+                result.ai_intelligence.candidates_accepted
+            )
+            provenance_payload["ai_candidates_rejected"] = (
+                result.ai_intelligence.candidates_rejected
+            )
+        if result.attack_paths is not None:
+            provenance_payload["attack_paths_evaluated"] = (
+                result.attack_paths.paths_evaluated
+            )
+            provenance_payload["attack_paths_network_exposed"] = (
+                result.attack_paths.network_exposed_paths
+            )
+            provenance_payload["attack_paths_tainted"] = (
+                result.attack_paths.taint_observed_paths
+            )
+        if result.policy_evaluation is not None:
+            provenance_payload["openvex_document_id"] = (
+                result.policy_evaluation.openvex_document.id
+            )
+            provenance_payload["openvex_version"] = (
+                result.policy_evaluation.openvex_document.version
+            )
+            provenance_payload["openvex_status_counts"] = (
+                result.policy_evaluation.status_counts
+            )
+        if result.risk_assessment is not None:
+            provenance_payload["risk_findings_scored"] = (
+                result.risk_assessment.findings_scored
+            )
+            provenance_payload["risk_kev_matches"] = (
+                result.risk_assessment.kev_matches
+            )
+            provenance_payload["risk_priority_counts"] = (
+                result.risk_assessment.priority_counts
             )
 
         artifacts.provenance_path.write_text(

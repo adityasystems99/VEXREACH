@@ -2,14 +2,16 @@
 
 ## 1. Objective of the MVP
 
-The MVP delivers the minimal end-to-end, reproducible pipeline for analyzing a Python application repository:
-1. Ingest application dependencies and known vulnerabilities (**Phase 3 Discovery Engine** + **Phase 4 OSV.dev Vulnerability Intelligence Engine** implemented; NVD/EPSS/KEV in later phases).
-2. Construct an application static call graph from Python source code (**Phase 5 Python Static Reachability Engine** implemented).
-3. Correlate candidate vulnerable dependency functions against application call paths (**Phase 5 Python Static Reachability Engine** implemented via validated `VulnerabilitySymbolManifest`).
-4. Deterministically evaluate reachability (explicit 6-state static outcome implemented in Phase 5; runtime & full policy evaluation in later phases).
-5. Emit an auditable, standards-compliant **OpenVEX 0.2.0** JSON document (planned).
+The backend platform delivers the complete Python vulnerability intelligence pipeline plus REST API v1 and deployment assets (while Go static analysis awaits a host/CI Go SDK and frontend UI is explicitly excluded):
+1. Ingest application dependencies and known vulnerabilities (**Discovery Engine** + **OSV.dev Vulnerability Intelligence Engine** + **EPSS / CISA KEV Threat Feeds** implemented).
+2. Identify candidate vulnerable symbols conservatively (**AI & Patch Symbol Intelligence Engine** supporting OpenAI, OpenRouter, Anthropic, Gemini, Ollama, and Disabled/Heuristic modes).
+3. Construct an application static call graph from Python source code & correlate candidate symbols (**Python Static Reachability Engine** verified across Fixtures A–M).
+4. Evaluate ingress exposure and conservative static taint propagation (**Attack Path Intelligence Engine** implemented).
+5. Rank contextual remediation priorities cleanly (**Deterministic Risk Intelligence Engine** implemented without conflating score with exploitability).
+6. Deterministically evaluate fail-closed completeness policies and emit an auditable **OpenVEX 0.2.0** JSON document (**Evidence & OpenVEX Engine** + **Runtime Trace Correlator**, **Continuous Reassessment Tracker**, and **What-If Simulator** implemented).
+7. Expose versioned backend automation via **CLI (`apps/cli/main.py`)** and **FastAPI REST API v1 (`apps/api/main.py`)** (`docs/api/openapi.v1.json`).
 
-See [DISCOVERY_ENGINE.md](DISCOVERY_ENGINE.md), [VULNERABILITY_INTELLIGENCE.md](VULNERABILITY_INTELLIGENCE.md), and [PYTHON_STATIC_REACHABILITY.md](PYTHON_STATIC_REACHABILITY.md) for acceptance criteria and boundaries.
+See [DISCOVERY_ENGINE.md](DISCOVERY_ENGINE.md), [VULNERABILITY_INTELLIGENCE.md](VULNERABILITY_INTELLIGENCE.md), [AI_SECURITY_INTELLIGENCE.md](AI_SECURITY_INTELLIGENCE.md), [PYTHON_STATIC_REACHABILITY.md](PYTHON_STATIC_REACHABILITY.md), [ATTACK_PATH_INTELLIGENCE.md](ATTACK_PATH_INTELLIGENCE.md), [OPENVEX_AND_POLICY_ENGINE.md](OPENVEX_AND_POLICY_ENGINE.md), [CREDENTIALS_AND_PROVIDERS.md](CREDENTIALS_AND_PROVIDERS.md), [KUBERNETES_DEPLOYMENT.md](KUBERNETES_DEPLOYMENT.md), [BENCHMARKS.md](BENCHMARKS.md), and [API Guide](../api/API_GUIDE.md) for acceptance tests and boundaries.
 
 ---
 

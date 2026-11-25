@@ -1,0 +1,70 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vexreach-assessment-worker
+  namespace: vexreach
+  labels:
+    app.kubernetes.io/name: vexreach-worker
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vexreach-worker
+    spec:
+      serviceAccountName: vexreach-worker
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vexreach
+          image: ghcr.io/adityasystems99/vexreach:latest
+          imagePullPolicy: IfNotPresent
+          entrypoint: ["python", "-m", "apps.cli.main"]
+          command: ["python", "-m", "apps.cli.main"]
+          args:
+            - "scan"
+            - "/workspace/target"
+            - "--output-dir"
+            - "/var/lib/vexreach/assessments"
+            - "--emit-vex"
+            - "--risk"
+          envFrom:
+            - configMapRef:
+                name: vexreach-config
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: workspace-target
+              mountPath: /workspace/target
+              readOnly: true
+            - name: vexreach-output
+              mountPath: /var/lib/vexreach
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workspace-target
+          emptyDir: {}
+        - name: vexreach-output
+          emptyDir: {}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi

@@ -12,19 +12,37 @@ from rich.panel import Panel
 from rich.table import Table
 
 from packages.core import __version__
+from packages.core.analysis import (
+    run_hybrid_reachability_discovery,
+    run_hybrid_reachability_repository,
+)
+from packages.core.analysis.go.reachability import (
+    GoAnalyzerError,
+    GoToolchainNotFoundError,
+    resolve_go_executable,
+)
 from packages.core.analysis.python import (
-    PythonReachabilityAnalyzer,
     load_entry_point_config,
     load_symbol_manifest,
 )
 from packages.core.config.settings import get_settings
+from packages.core.engines.ai_intelligence import AISecurityIntelligenceOrchestrator
+from packages.core.engines.attack_path import AttackPathOrchestrator
 from packages.core.engines.discovery.orchestrator import DiscoveryOrchestrator
 from packages.core.engines.intelligence.orchestrator import IntelligenceOrchestrator
+from packages.core.engines.openvex import OpenVEXOrchestrator
+from packages.core.engines.risk import RiskIntelligenceOrchestrator
+from packages.core.integrations.threat_feeds import ThreatFeedClient
 from packages.core.integrations.trivy.client import TrivyClient, TrivyError
+from packages.core.models.ai_intelligence import AIAdvisoryIntelligenceReport
+from packages.core.models.attack_path import AttackPathReport
 from packages.core.models.discovery import DiscoveryResult, ScanStatus, SeverityLevel
 from packages.core.models.intelligence import IntelligenceStatus, VulnerabilityIntelligenceReport
+from packages.core.models.openvex import OpenVEXPolicyReport
 from packages.core.models.reachability import ReachabilityState, StaticReachabilityReport
+from packages.core.models.risk import RiskIntelligenceReport, WorkloadContext
 from packages.core.storage.evidence_store import EvidenceStore
+from packages.core.storage.vex_history import SQLiteVEXStore
 from packages.core.utils.logging import get_logger, setup_logging
 
 app = typer.Typer(
@@ -145,6 +163,16 @@ def check_config_command() -> None:
             "Trivy Scanner",
             "[yellow]NOT FOUND[/yellow]",
             "Install Trivy or set VEXREACH_TRIVY_PATH for Discovery Engine scans",
+        )
+
+    try:
+        go_bin = resolve_go_executable(settings)
+        table.add_row("Go Toolchain", "[green]FOUND[/green]", go_bin)
+    except GoToolchainNotFoundError:
+        table.add_row(
+            "Go Toolchain",
+            "[yellow]NOT FOUND[/yellow]",
+            "Install Go (>=1.22) or set VEXREACH_GO_PATH for Go static reachability & operator builds",
         )
 
     table.add_row("Database Path", "[green]CONFIGURED[/green]", str(settings.storage_path))
@@ -327,6 +355,144 @@ def _render_reachability_summary(
         console.print(f"Reachability artifacts: {output_dir}")
 
 
+def _render_ai_intelligence_summary(report: AIAdvisoryIntelligenceReport) -> None:
+    """Render AI Security Intelligence candidate symbol extraction summary."""
+    console.print("\n[bold cyan]VEXReach AI & Patch Symbol Intelligence[/bold cyan]\n")
+    console.print(f"Provider: {report.llm_provider} (model={report.llm_model or 'none'})")
+    console.print(
+        f"Processed: {report.vulnerabilities_processed} Python vulns, "
+        f"patches_retrieved={report.patches_retrieved}"
+    )
+    console.print(
+        f"Candidates: accepted={report.candidates_accepted}, "
+        f"rejected={report.candidates_rejected}, "
+        f"prompt_injection_signals={report.prompt_injections_detected}"
+    )
+    if report.prompt_injections_detected > 0:
+        console.print(
+            "[yellow]Security notice: Indirect prompt-injection pattern(s) detected and quarantined.[/yellow]"
+        )
+    if report.analyses:
+        table = Table(title="Candidate Vulnerable Symbols Extracted")
+        table.add_column("Vulnerability", style="bold")
+        table.add_column("Package")
+        table.add_column("Symbol")
+        table.add_column("Source")
+        table.add_column("Confidence")
+        for item in report.analyses:
+            if not item.accepted_symbols:
+                table.add_row(item.vulnerability_id, item.package_name, "-", "-", "none")
+                continue
+            for sym in item.accepted_symbols:
+                table.add_row(
+                    item.vulnerability_id,
+                    item.package_name,
+                    sym.qualified_name,
+                    sym.source.value,
+                    sym.confidence.value,
+                )
+        console.print(table)
+
+
+def _render_attack_path_summary(report: AttackPathReport) -> None:
+    """Render Attack Path Intelligence summary cleanly."""
+    console.print("\n[bold cyan]VEXReach Attack Path Intelligence[/bold cyan]\n")
+    console.print(
+        f"Paths evaluated={report.paths_evaluated}, "
+        f"network_exposed={report.network_exposed_paths}, "
+        f"taint_observed={report.taint_observed_paths}, "
+        f"call_path_only={report.call_path_only_paths}"
+    )
+    if report.paths:
+        table = Table(title="Conservative Attack Paths")
+        table.add_column("Vulnerability", style="bold")
+        table.add_column("Entry Point")
+        table.add_column("Surface")
+        table.add_column("Data Flow Status")
+        table.add_column("Target Symbol")
+        for item in report.paths:
+            table.add_row(
+                item.vulnerability_id,
+                item.entry_point,
+                item.exposure_surface.value,
+                item.data_flow_status.value,
+                item.target_symbol,
+            )
+        console.print(table)
+
+
+def _render_vex_summary(report: OpenVEXPolicyReport) -> None:
+    """Render deterministic OpenVEX 0.2.0 policy summary cleanly."""
+    doc = report.openvex_document
+    console.print("\n[bold cyan]VEXReach OpenVEX 0.2.0 Policy Assessment[/bold cyan]\n")
+    console.print(
+        f"Document: {doc.id} (v{doc.version}, schema_valid={report.schema_valid})"
+    )
+    console.print(
+        "Status counts: "
+        + ", ".join(f"{status}={count}" for status, count in report.status_counts.items())
+    )
+    if report.completeness.blocking_gaps:
+        console.print(
+            "[yellow]Completeness blockers preserving conservative uncertainty:[/yellow]"
+        )
+        for gap in report.completeness.blocking_gaps:
+            console.print(f"  - {gap}")
+
+    if report.decisions:
+        table = Table(title="Deterministic VEX Decisions")
+        table.add_column("Vulnerability", style="bold")
+        table.add_column("Package")
+        table.add_column("Status")
+        table.add_column("Rule")
+        table.add_column("Confidence")
+        for dec in report.decisions:
+            table.add_row(
+                dec.vulnerability_id,
+                dec.package_name,
+                dec.decided_status.value,
+                dec.decision_rule,
+                dec.confidence,
+            )
+        console.print(table)
+    if report.openvex_file_path:
+        console.print(f"OpenVEX artifact: {report.openvex_file_path}")
+
+
+def _render_risk_summary(report: RiskIntelligenceReport) -> None:
+    """Render explainable Risk Intelligence summary without fabricating exploitability."""
+    console.print("\n[bold cyan]VEXReach Contextual Risk Intelligence[/bold cyan]\n")
+    console.print(
+        f"Findings scored={report.findings_scored}, KEV matches={report.kev_matches}, "
+        f"workload={report.workload_context.workload_name} ({report.workload_context.criticality})"
+    )
+    console.print(
+        "Priority counts: "
+        + ", ".join(f"{tier}={cnt}" for tier, cnt in report.priority_counts.items())
+    )
+    if report.assessments:
+        table = Table(title="Risk Prioritization")
+        table.add_column("Vulnerability", style="bold")
+        table.add_column("Package")
+        table.add_column("Score")
+        table.add_column("Tier")
+        table.add_column("Static Path")
+        table.add_column("KEV")
+        for item in report.assessments:
+            table.add_row(
+                item.vulnerability_id,
+                item.package_name,
+                f"{item.contextual_score:.1f}",
+                item.priority_tier.value,
+                str(item.static_path_identified),
+                str(item.threat_signals.in_cisa_kev),
+            )
+        console.print(table)
+    console.print(
+        "\n[dim]Note: Contextual risk scores rank remediation priority; exploitability_established remains False unless verified separately.[/dim]"
+    )
+
+
 @app.command("scan")
 def scan_command(
     ctx: typer.Context,
@@ -374,6 +540,27 @@ def scan_command(
             help="Bypass and refresh local SQLite OSV advisory cache during enrichment",
         ),
     ] = False,
+    extract_symbols: Annotated[
+        bool,
+        typer.Option(
+            "--extract-symbols",
+            help="Extract & validate candidate vulnerable symbols from patches and configured LLM",
+        ),
+    ] = False,
+    patch_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--patch-dir",
+            help="Directory containing local <vuln-id>.diff/.patch files for symbol extraction",
+        ),
+    ] = None,
+    fetch_patches: Annotated[
+        bool,
+        typer.Option(
+            "--fetch-patches",
+            help="Allow fetching upstream commit/PR diffs from allowlisted GitHub HTTPS URLs",
+        ),
+    ] = False,
     analyze: Annotated[
         bool,
         typer.Option(
@@ -381,6 +568,35 @@ def scan_command(
             help="Run Python AST static call-graph reachability analysis after discovery",
         ),
     ] = False,
+    attack_paths: Annotated[
+        bool,
+        typer.Option(
+            "--attack-paths",
+            help="Run Attack Path Intelligence over reachable Python paths (implies --analyze)",
+        ),
+    ] = False,
+    emit_vex: Annotated[
+        bool,
+        typer.Option(
+            "--emit-vex",
+            help="Evaluate deterministic policies and emit OpenVEX 0.2.0 statements",
+        ),
+    ] = False,
+    compute_risk: Annotated[
+        bool,
+        typer.Option(
+            "--risk",
+            help="Evaluate explainable contextual Risk Intelligence (CVSS, EPSS/KEV, reachability)",
+        ),
+    ] = False,
+    epss_file: Annotated[
+        Path | None,
+        typer.Option("--epss-file", help="Optional local EPSS JSON snapshot file"),
+    ] = None,
+    kev_file: Annotated[
+        Path | None,
+        typer.Option("--kev-file", help="Optional local CISA KEV catalog JSON file"),
+    ] = None,
     symbols: Annotated[
         Path | None,
         typer.Option(
@@ -464,23 +680,54 @@ def scan_command(
                 refresh_cache=refresh_cache,
             )
 
-    if analyze:
+    ai_generated_manifest = None
+    if extract_symbols:
+        with AISecurityIntelligenceOrchestrator(
+            settings=settings,
+            dependency_source_dirs=dependency_source,
+        ) as ai_orch:
+            result, ai_report, raw_patch_payloads = ai_orch.analyze_discovery_result(
+                result,
+                patch_dir=patch_dir,
+                fetch_remote_patches=fetch_patches,
+            )
+            ai_generated_manifest = ai_report.generated_manifest
+            if artifacts is not None:
+                ai_store = EvidenceStore(artifacts.assessment_dir.parent)
+                ai_store.persist_ai_intelligence_artifacts(
+                    artifacts,
+                    ai_report,
+                    raw_patch_payloads=raw_patch_payloads,
+                )
+                ai_store.persist_assessment(artifacts=artifacts, result=result)
+
+    if analyze or attack_paths:
         loaded_manifest = None
         manifest_sha = None
         loaded_ep_config = None
         try:
             if symbols is not None:
                 loaded_manifest, manifest_sha = load_symbol_manifest(symbols)
+            elif ai_generated_manifest is not None:
+                loaded_manifest = ai_generated_manifest
+                if (
+                    artifacts is not None
+                    and artifacts.candidate_symbols_path is not None
+                    and artifacts.candidate_symbols_path.is_file()
+                ):
+                    from packages.core.utils.safe_path import calculate_file_sha256
+
+                    manifest_sha = calculate_file_sha256(artifacts.candidate_symbols_path)
             if entry_points is not None:
                 loaded_ep_config = load_entry_point_config(entry_points)
         except (FileNotFoundError, ValueError) as err:
             err_console.print(f"[red]Reachability configuration error:[/red] {err}")
             raise typer.Exit(code=1) from err
 
-        analyzer = PythonReachabilityAnalyzer(settings=settings)
-        result, reach_bundle = analyzer.analyze_discovery_result(
+        result, reach_bundle = run_hybrid_reachability_discovery(
             result,
             target_path=target,
+            settings=settings,
             manifest=loaded_manifest,
             manifest_sha256=manifest_sha,
             entry_point_config=loaded_ep_config,
@@ -498,16 +745,60 @@ def scan_command(
             )
             reach_store.persist_assessment(artifacts=artifacts, result=result)
 
+    if attack_paths:
+        result, ap_report = AttackPathOrchestrator(
+            settings=settings
+        ).analyze_discovery_result(result, target_path=target)
+        if artifacts is not None:
+            ap_store = EvidenceStore(artifacts.assessment_dir.parent)
+            ap_store.persist_attack_path_artifacts(artifacts, ap_report)
+            ap_store.persist_assessment(artifacts=artifacts, result=result)
+
+    if compute_risk:
+        with ThreatFeedClient(settings=settings) as feed_client:
+            snap = feed_client.load_snapshot(
+                [v.vulnerability_id for v in result.vulnerabilities],
+                epss_file=epss_file,
+                kev_file=kev_file,
+                fetch_remote=False,
+            )
+        result, risk_report = RiskIntelligenceOrchestrator().evaluate(
+            result, threat_snapshot=snap
+        )
+        if artifacts is not None:
+            risk_store = EvidenceStore(artifacts.assessment_dir.parent)
+            risk_store.persist_risk_artifacts(artifacts, risk_report)
+            risk_store.persist_assessment(artifacts=artifacts, result=result)
+
+    if emit_vex:
+        vex_store = (
+            EvidenceStore(artifacts.assessment_dir.parent)
+            if artifacts is not None
+            else None
+        )
+        result, _ = OpenVEXOrchestrator(
+            settings=settings,
+            evidence_store=vex_store,
+        ).generate(result, artifacts=artifacts)
+
     if fmt == "json":
         typer.echo(result.model_dump_json(indent=2))
     else:
         _render_discovery_summary(result, artifacts.assessment_dir if artifacts else None)
         if result.intelligence is not None:
             _render_intelligence_summary(result.intelligence)
+        if result.ai_intelligence is not None:
+            _render_ai_intelligence_summary(result.ai_intelligence)
         if result.reachability is not None:
             _render_reachability_summary(
                 result.reachability, artifacts.assessment_dir if artifacts else None
             )
+        if result.attack_paths is not None:
+            _render_attack_path_summary(result.attack_paths)
+        if result.risk_assessment is not None:
+            _render_risk_summary(result.risk_assessment)
+        if result.policy_evaluation is not None:
+            _render_vex_summary(result.policy_evaluation)
 
     if result.scan_metadata.scan_status == ScanStatus.FAILED:
         raise typer.Exit(code=1)
@@ -660,12 +951,20 @@ def analyze_command(
             help="Maximum call paths to enumerate per target symbol",
         ),
     ] = None,
+    language: Annotated[
+        str,
+        typer.Option(
+            "--language",
+            "-l",
+            help="Target static analyzer language: auto, python, or go",
+        ),
+    ] = "auto",
     verbose: Annotated[
         bool,
         typer.Option("--verbose", "-v", help="Enable verbose debug logging"),
     ] = False,
 ) -> None:
-    """Run conservative Python AST static call-graph reachability analysis."""
+    """Run conservative static AST call-graph reachability analysis (Python & Go)."""
     fmt = output_format.strip().lower()
     if fmt not in {"table", "text", "json"}:
         raise typer.BadParameter(
@@ -690,10 +989,11 @@ def analyze_command(
         err_console.print(f"[red]Invalid input manifest or entry-point config:[/red] {err}")
         raise typer.Exit(code=1) from err
 
-    analyzer = PythonReachabilityAnalyzer(settings=settings)
     try:
-        bundle = analyzer.analyze_repository(
+        bundle = run_hybrid_reachability_repository(
             target_path=target,
+            language=language,
+            settings=settings,
             manifest=loaded_manifest,
             manifest_sha256=manifest_sha,
             entry_point_config=loaded_ep_config,
@@ -701,7 +1001,7 @@ def analyze_command(
             max_depth=max_depth,
             max_paths=max_paths,
         )
-    except (FileNotFoundError, ValueError) as err:
+    except (FileNotFoundError, ValueError, GoAnalyzerError) as err:
         err_console.print(f"[red]Target analysis error:[/red] {err}")
         raise typer.Exit(code=1) from err
 
@@ -723,6 +1023,261 @@ def analyze_command(
         _render_reachability_summary(
             bundle.report, output_dir.resolve() if output_dir else None
         )
+
+
+@app.command("extract-symbols")
+def extract_symbols_command(
+    assessment_id: Annotated[
+        str,
+        typer.Argument(help="Assessment ID or directory path containing discovery-assessment.json"),
+    ],
+    assessments_dir: Annotated[
+        Path | None,
+        typer.Option("--assessments-dir", "-d", help="Base directory where assessments are stored"),
+    ] = None,
+    patch_dir: Annotated[
+        Path | None,
+        typer.Option("--patch-dir", help="Optional directory containing local .diff/.patch files"),
+    ] = None,
+    dependency_source: Annotated[
+        list[Path] | None,
+        typer.Option("--dependency-source", help="Directory containing dependency Python sources"),
+    ] = None,
+    fetch_patches: Annotated[
+        bool,
+        typer.Option("--fetch-patches", help="Allow fetching allowlisted GitHub HTTPS commit diffs"),
+    ] = False,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: table, text, or json"),
+    ] = "table",
+) -> None:
+    """Extract and deterministically validate candidate vulnerable symbols for an assessment."""
+    fmt = output_format.strip().lower()
+    if fmt not in {"table", "text", "json"}:
+        raise typer.BadParameter("Format must be 'table', 'text', or 'json'.", param_hint="--format")
+
+    settings = get_settings()
+    if fmt == "json":
+        setup_logging(level=settings.log_level, log_format=settings.log_format, stream=sys.stderr)
+
+    store = EvidenceStore(assessments_dir or settings.default_output_dir)
+    try:
+        result, artifacts = store.load_assessment(assessment_id)
+    except (FileNotFoundError, ValueError) as err:
+        err_console.print(f"[red]Error loading assessment:[/red] {err}")
+        raise typer.Exit(code=1) from err
+
+    with AISecurityIntelligenceOrchestrator(
+        settings=settings,
+        dependency_source_dirs=dependency_source,
+    ) as ai_orch:
+        result, report, raw_patch_payloads = ai_orch.analyze_discovery_result(
+            result,
+            patch_dir=patch_dir,
+            fetch_remote_patches=fetch_patches,
+        )
+        store.persist_ai_intelligence_artifacts(
+            artifacts, report, raw_patch_payloads=raw_patch_payloads
+        )
+        store.persist_assessment(artifacts=artifacts, result=result)
+
+    if fmt == "json":
+        typer.echo(report.model_dump_json(indent=2))
+    else:
+        _render_ai_intelligence_summary(report)
+
+
+@app.command("attack-paths")
+def attack_paths_command(
+    assessment_id: Annotated[
+        str,
+        typer.Argument(help="Assessment ID or directory path containing discovery-assessment.json"),
+    ],
+    assessments_dir: Annotated[
+        Path | None,
+        typer.Option("--assessments-dir", "-d", help="Base directory where assessments are stored"),
+    ] = None,
+    target_path: Annotated[
+        Path | None,
+        typer.Option("--target", "-t", help="Override target repository source path"),
+    ] = None,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: table, text, or json"),
+    ] = "table",
+) -> None:
+    """Analyze ingress exposure, barriers, and conservative taint along reachable Python paths."""
+    fmt = output_format.strip().lower()
+    if fmt not in {"table", "text", "json"}:
+        raise typer.BadParameter("Format must be 'table', 'text', or 'json'.", param_hint="--format")
+
+    settings = get_settings()
+    if fmt == "json":
+        setup_logging(level=settings.log_level, log_format=settings.log_format, stream=sys.stderr)
+
+    store = EvidenceStore(assessments_dir or settings.default_output_dir)
+    try:
+        result, artifacts = store.load_assessment(assessment_id)
+    except (FileNotFoundError, ValueError) as err:
+        err_console.print(f"[red]Error loading assessment:[/red] {err}")
+        raise typer.Exit(code=1) from err
+
+    result, ap_report = AttackPathOrchestrator(settings=settings).analyze_discovery_result(
+        result, target_path=target_path
+    )
+    store.persist_attack_path_artifacts(artifacts, ap_report)
+    store.persist_assessment(artifacts=artifacts, result=result)
+
+    if fmt == "json":
+        typer.echo(ap_report.model_dump_json(indent=2))
+    else:
+        _render_attack_path_summary(ap_report)
+
+
+@app.command("vex")
+def vex_command(
+    assessment_id: Annotated[
+        str,
+        typer.Argument(help="Assessment ID or directory path containing discovery-assessment.json"),
+    ],
+    assessments_dir: Annotated[
+        Path | None,
+        typer.Option("--assessments-dir", "-d", help="Base directory where assessments are stored"),
+    ] = None,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: table, text, json (pure OpenVEX), or policy-json"),
+    ] = "table",
+    history: Annotated[
+        bool,
+        typer.Option("--history", help="Display historical OpenVEX document revisions for this target"),
+    ] = False,
+) -> None:
+    """Evaluate deterministic policies and emit or inspect OpenVEX 0.2.0 statements."""
+    fmt = output_format.strip().lower()
+    if fmt not in {"table", "text", "json", "policy-json"}:
+        raise typer.BadParameter(
+            "Format must be 'table', 'text', 'json', or 'policy-json'.",
+            param_hint="--format",
+        )
+
+    settings = get_settings()
+    if fmt in {"json", "policy-json"}:
+        setup_logging(level=settings.log_level, log_format=settings.log_format, stream=sys.stderr)
+
+    store = EvidenceStore(assessments_dir or settings.default_output_dir)
+    try:
+        result, artifacts = store.load_assessment(assessment_id)
+    except (FileNotFoundError, ValueError) as err:
+        err_console.print(f"[red]Error loading assessment:[/red] {err}")
+        raise typer.Exit(code=1) from err
+
+    history_store = SQLiteVEXStore(settings.storage_path)
+    if history:
+        revisions = history_store.list_history(result.target.target_path)
+        if fmt in {"json", "policy-json"}:
+            import json as _json
+
+            typer.echo(_json.dumps(revisions, indent=2))
+            return
+        console.print(f"[bold]OpenVEX History for:[/bold] {result.target.target_path}")
+        for rev in revisions:
+            console.print(
+                f"  v{rev['version']} | {rev['document_id']} | sha256={rev['content_sha256'][:12]} | counts={rev['status_counts']}"
+            )
+        return
+
+    _, policy_report = OpenVEXOrchestrator(
+        settings=settings,
+        vex_history_store=history_store,
+        evidence_store=store,
+    ).generate(result, artifacts=artifacts)
+
+    if fmt == "json":
+        typer.echo(policy_report.openvex_document.to_openvex_json())
+    elif fmt == "policy-json":
+        typer.echo(policy_report.model_dump_json(indent=2))
+    else:
+        _render_vex_summary(policy_report)
+
+
+@app.command("risk")
+def risk_command(
+    assessment_id: Annotated[
+        str,
+        typer.Argument(help="Assessment ID or directory path containing discovery-assessment.json"),
+    ],
+    assessments_dir: Annotated[
+        Path | None,
+        typer.Option("--assessments-dir", "-d", help="Base directory where assessments are stored"),
+    ] = None,
+    epss_file: Annotated[
+        Path | None,
+        typer.Option("--epss-file", help="Optional local EPSS JSON snapshot file"),
+    ] = None,
+    kev_file: Annotated[
+        Path | None,
+        typer.Option("--kev-file", help="Optional local CISA KEV catalog JSON file"),
+    ] = None,
+    fetch_feeds: Annotated[
+        bool,
+        typer.Option("--fetch-feeds", help="Fetch live FIRST EPSS & CISA KEV feeds over HTTPS"),
+    ] = False,
+    internet_facing: Annotated[
+        bool,
+        typer.Option("--internet-facing", help="Mark workload as internet-facing"),
+    ] = False,
+    criticality: Annotated[
+        str,
+        typer.Option("--criticality", help="Workload criticality: critical, high, medium, low"),
+    ] = "medium",
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: table, text, or json"),
+    ] = "table",
+) -> None:
+    """Compute explainable contextual Risk Intelligence for a stored assessment."""
+    fmt = output_format.strip().lower()
+    if fmt not in {"table", "text", "json"}:
+        raise typer.BadParameter("Format must be 'table', 'text', or 'json'.", param_hint="--format")
+    crit = criticality.strip().lower()
+    if crit not in {"critical", "high", "medium", "low"}:
+        raise typer.BadParameter("criticality must be critical, high, medium, or low.")
+
+    settings = get_settings()
+    if fmt == "json":
+        setup_logging(level=settings.log_level, log_format=settings.log_format, stream=sys.stderr)
+
+    store = EvidenceStore(assessments_dir or settings.default_output_dir)
+    try:
+        result, artifacts = store.load_assessment(assessment_id)
+    except (FileNotFoundError, ValueError) as err:
+        err_console.print(f"[red]Error loading assessment:[/red] {err}")
+        raise typer.Exit(code=1) from err
+
+    with ThreatFeedClient(settings=settings) as feed_client:
+        snap = feed_client.load_snapshot(
+            [v.vulnerability_id for v in result.vulnerabilities],
+            epss_file=epss_file,
+            kev_file=kev_file,
+            fetch_remote=fetch_feeds,
+        )
+    result, report = RiskIntelligenceOrchestrator().evaluate(
+        result,
+        threat_snapshot=snap,
+        workload_context=WorkloadContext(
+            internet_facing=internet_facing,
+            criticality=crit,  # type: ignore[arg-type]
+        ),
+    )
+    store.persist_risk_artifacts(artifacts, report)
+    store.persist_assessment(artifacts=artifacts, result=result)
+
+    if fmt == "json":
+        typer.echo(report.model_dump_json(indent=2))
+    else:
+        _render_risk_summary(report)
 
 
 if __name__ == "__main__":
