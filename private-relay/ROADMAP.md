@@ -6,12 +6,12 @@
 
 | Capability | Category | Status | Target Phase |
 | :--- | :--- | :--- | :--- |
-| Binary cell framing (`600B` link frames) | Proposed Design | **Specified (`Phase 1`)** / Not yet coded | Phase 2 |
-| `Noise_IK` link channel + `Noise_NK` telescopic hop exchange | Established Tech + Hybrid Composition | **Specified (`Phase 1`)** | Phase 2 |
-| Per-hop `ChaCha20-Poly1305` + `u64` replay sequence enforcement | Established Tech | **Specified (`Phase 1`)** | Phase 2 |
-| Single Rust relay (`CircuitTable`, bounded queues, SSRF check) | Proposed Implementation | **Specified (`Phase 1`)** | Phase 3 |
-| Local 3-hop forwarding (`Client → Entry → Middle → Exit → Dest`) | Proposed Implementation | **Specified (`Phase 1`)** | Phase 4 |
-| Response routing back along circuit | Proposed Implementation | **Specified (`Phase 1`)** | Phase 4 |
+| Binary cell framing (`600B` total wire frames / `582B` plaintext) | Implemented Prototype (`Day 1`) | **Implemented & Tested (`10/10` tests passing)** | Day 1 (`Complete`) |
+| `Noise_IK` link channel + `Noise_NK` telescopic hop exchange | Established Tech + Hybrid Composition | **Implemented & Tested (`Day 2`, `4/4` crypto + `3/3` network tests)** | Day 2 (`Complete`) |
+| Per-hop `ChaCha20-Poly1305` + `u64` replay sequence enforcement | Established Tech | **Implemented & Tested (`Day 2`, `4/4` crypto tests)** | Day 2 (`Complete`) |
+| Single Rust relay (`CircuitTable`, bounded queues, SSRF check) | Proposed Implementation | **Implemented & Tested (`Day 2`, `4/4` relay tests)** | Day 2 (`Complete`) |
+| Local 3-hop forwarding (`Client → Entry → Middle → Exit → Dest`) | Proposed Implementation | **Implemented & Tested (`Day 2`, `8/8` E2E tests)** | Day 2 (`Complete`) |
+| Response routing back along circuit | Proposed Implementation | **Implemented & Tested (`Day 2`, `8/8` E2E tests)** | Day 2 (`Complete`) |
 | Coordinator registry, operator diversity & failover | Proposed / Deferred | **Planned** | Phase 5 |
 | Privacy-preserving Prometheus aggregate metrics | Proposed / Deferred | **Planned** | Phase 6 |
 | Adversarial crypto, SSRF & DoS test harness | Proposed / Deferred | **Planned** | Phase 7 |

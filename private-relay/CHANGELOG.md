@@ -2,6 +2,23 @@
 
 All notable architectural, protocol, and implementation milestones are recorded chronologically here.
 
+## `[0.1.0-day2]` — 2026-11-26 (Day 2 Cryptography, Transport, Relay Engine & 3-Hop Client)
+- **Added `crates/crypto` (`private-relay-crypto`):** `StaticKeypair` (`ZeroizeOnDrop`), `LinkInitiator`/`LinkResponder`/`LinkSession` (`Noise_IK` + exact `600B` fixed frames via `snow v0.9.6`), `HopHandshakeInitiator`/`HopHandshakeResponder`/`HopCipherPair`/`ClientCircuitCrypto` (`Noise_NK` + transcript-salted `HKDF-SHA256` per `D-08` + strict FIFO `ChaCha20-Poly1305` `15B` AAD per `D-07`).
+- **Added `crates/network` (`private-relay-network`):** `RelayRole`, `PeerDescriptor`, TOML-serializable `RelayConfig`, DNS-once SSRF-blocking `DestinationPolicy`, and async `LinkReader`/`LinkWriter` handling partial TCP reads/writes (`recv_cell_with_timeouts`) and `Noise_IK` links.
+- **Added `crates/relay` (`private-relay-relay`):** Single parameterized `RelayServer`/`RelayHandle` supporting `Entry`, `Middle`, and `Exit` roles, multiplexed outbound `PeerLink` pool, cancellation-safe hop extension, global & per-IP capacity limits, bounded `mpsc` backpressure, role/allowlist checks, Exit request reassembly & bounded response execution, and PII-free structured logging.
+- **Added `crates/client` (`private-relay-client`):** `RelayClient::connect_three_hop` (fresh per-session ephemeral keypair + 3 telescopic hops) and `ClientCircuit::send_request`/`close`.
+- **Reconciled Documentation:** Recorded `D-08` in [DECISIONS.md](./DECISIONS.md), updated [SECURITY_DESIGN.md](./SECURITY_DESIGN.md), [KNOWN_ISSUES.md](./KNOWN_ISSUES.md), [PROJECT_STATUS.md](./PROJECT_STATUS.md), [ROADMAP.md](./ROADMAP.md), and [TEST_RESULTS.md](./TEST_RESULTS.md).
+- **Verified Checks:** `cargo fmt --all -- --check`, `cargo clippy --offline --workspace --all-targets -- -D warnings`, and `cargo test --offline --workspace` (`29 passed; 0 failed; 0 ignored`).
+
+## `[0.1.0-day1]` — 2026-11-26 (Day 1 Protocol Core & Architecture Freeze)
+- **Approved & Recorded Decisions:**
+  - `D-01`: Approved Choice A — Bounded Request/Response Forwarding (`<= 64 KiB` request & response, `<= 140` chunks per logical message, `RequestId` association) over bidirectional relay-link TCP connections.
+  - `D-02`: Reconciled wire arithmetic so complete on-wire outer Noise frame = `600` bytes exact (`2B outer_len == 598` + `582B` padded outer plaintext + `16B` Noise MAC); max inner `Cell` = `580B` (`9B` header + `<= 571B` body); `InnerPayload` = `<= 496B` (`9B` header + `<= 487B` fragment, fitting `64 KiB + 257B` target header in `136 <= 140` chunks).
+  - `D-07`: Corrected end-to-end per-hop AEAD AAD to omit link-local `CircuitId`, binding `b"PRv1" || version || direction || hop_index || seq` (`15B`), paired with ephemeral per-circuit `Noise_NK` keys and link-layer `Noise_IK` authentication.
+- **Updated Docs:** `DECISIONS.md`, `PROTOCOL_SPEC.md`, `SECURITY_DESIGN.md`, `MVP_SCOPE.md`, `THREAT_MODEL.md`, `ROADMAP.md`, `KNOWN_ISSUES.md`, `PROJECT_STATUS.md`, `TEST_RESULTS.md`, `README.md`.
+- **Implemented Workspace & Protocol Crate:** Created `private-relay/Cargo.toml` and `private-relay-protocol` (`constants`, `error`, `circuit`, `request`, `cell`, `frame`, `message`, `lib`, `tests/protocol_tests.rs` with zero external crate dependencies).
+- **Verified Checks:** `cargo fmt --all -- --check`, `cargo check --workspace`, `cargo test --workspace` (`10 passed; 0 failed`), and `cargo clippy --workspace --all-targets -- -D warnings`.
+
 ## `[0.1.0-spec]` — 2026-11-26 (Phase 1 & Phase 2 Baseline)
 - **Added Phase 1 Specifications:** [PROTOCOL_SPEC.md](./PROTOCOL_SPEC.md), [THREAT_MODEL.md](./THREAT_MODEL.md), [ARCHITECTURE.md](./ARCHITECTURE.md) (including 6 Mermaid architecture/flow/trust diagrams), and [SECURITY_DESIGN.md](./SECURITY_DESIGN.md).
 - **Added Phase 2 Foundation:** [TECH_STACK.md](./TECH_STACK.md), [MVP_SCOPE.md](./MVP_SCOPE.md), [docs/TECH_DECISIONS.md](./docs/TECH_DECISIONS.md), and [ROADMAP.md](./ROADMAP.md).

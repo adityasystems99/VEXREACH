@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/crypto",
+    "crates/network",
+    "crates/relay",
+    "crates/client",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.80"
+
+[workspace.dependencies]
+private-relay-protocol = { path = "crates/protocol" }
+private-relay-crypto = { path = "crates/crypto" }
+private-relay-network = { path = "crates/network" }
+private-relay-relay = { path = "crates/relay" }
+private-relay-client = { path = "crates/client" }
+snow = "0.9"
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+zeroize = { version = "1", features = ["derive"] }
+rand = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+tracing = "0.1"

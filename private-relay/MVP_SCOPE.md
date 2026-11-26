@@ -4,10 +4,10 @@
 
 ## 1. Functional Requirements (`v0.1` Local Multi-Hop Milestone)
 
-- **`FR-01` Binary Framing:** Serialize/deserialize fixed `600`-byte outer link frames and `9`-byte cell headers with bounds checks rejecting oversized or malformed packets.
+- **`FR-01` Binary Framing:** Serialize/deserialize fixed `600`-byte total on-wire Noise link frames (`2B` length `== 598` + `582B` plaintext + `16B` MAC) carrying `<= 580`-byte overlay cells (`9B` header + `<= 571B` body) with bounds checks rejecting oversized or malformed packets.
 - **`FR-02` Peer Link Encryption:** Establish authenticated `Noise_IK` sessions over TCP between adjacent nodes (`Client↔Entry`, `Entry↔Middle`, `Middle↔Exit`).
 - **`FR-03` Telescopic 3-Hop Circuit Build:** Client establishes independent `Noise_NK` forward/backward AEAD states (`K_fwd_i`, `K_bwd_i`) across `Entry → Middle → Exit`.
-- **`FR-04` Bounded Request & Response Relaying (`Decision D-01`):** Forward request payloads up to `64 KiB` (`<= 140` chunks) to a target `(host, port)`, receive Destination response (`<= 64 KiB`), and route replies cleanly back to Client.
+- **`FR-04` Bounded Request & Response Relaying (`Approved D-01`):** Forward request payloads up to `64 KiB` (`<= 140` chunks, `<= 487B` fragment per chunk, associated via `RequestId`) to a target `(host, port)`, receive Destination response (`<= 64 KiB`, `<= 140` chunks), and route replies cleanly back to Client. No long-lived multiplexed streams or `SENDME` flow control in `v0.1`.
 - **`FR-05` Exit DNS & SSRF Enforcement:** Resolve destination domain names at `Exit` only; deny loopback/RFC1918/link-local IPs by default (`allow_loopback_for_test = false`).
 - **`FR-06` Failure & Teardown Propagation:** Clean `DESTROY` propagation and immediate secret zeroization on AEAD failure, sequence replay, socket EOF, or timeout.
 - **`FR-07` Configurable Local 3-Relay Testbed:** Launch 3 independent `relay` processes on separate `127.0.0.1` ports from TOML configs.
@@ -19,7 +19,7 @@
 
 | Parameter | Initial `v0.1` Bound | Engineering Purpose |
 | :--- | :--- | :--- |
-| `MAX_CELL_OUTER_BYTES` | `600` bytes (`+2B` TCP length header) | Uniform packet size on wire; bounds single-frame stack/heap allocation. |
+| `WIRE_FRAME_BYTES` | `600` bytes (`2B len==598 + 582B plaintext + 16B MAC`) | Exact uniform packet size on TCP wire; bounds single-frame stack/heap allocation. |
 | `MAX_MESSAGE_BYTES` | `65,536` bytes (`64 KiB`) | Prevents memory amplification per request/response on relays & client. |
 | `MAX_CONCURRENT_CIRCUITS` | `1024` per relay (`16` per source IP at Entry) | Protects relay RAM & file descriptors under connection floods. |
 | `CIRCUIT_QUEUE_CAPACITY` | `64` cells (`~38 KiB` per circuit) | Strict backpressure; slow readers cannot cause unbounded memory growth. |

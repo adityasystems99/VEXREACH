@@ -1,0 +1,17 @@
+[package]
+name = "private-relay-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Three-hop Private-Relay client performing telescopic Noise circuits and bounded requests"
+
+[dependencies]
+private-relay-protocol = { workspace = true }
+private-relay-crypto = { workspace = true }
+private-relay-network = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+private-relay-relay = { workspace = true }

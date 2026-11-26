@@ -1,6 +1,6 @@
 # Private-Relay Protocol Specification (`v0.1-draft`)
 
-> **Implementation Status Notice:** This document specifies the target architecture for **Private-Relay v0.1**. Zero components in this specification are implemented in code yet. Every capability described below is categorized explicitly under *Established Technology*, *Proposed Architectural Design*, or *Deferred/Planned*.
+> **Implementation Status Notice:** This document specifies the frozen `v0.1` architecture for **Private-Relay** (`D-01`, `D-02`, and `D-07` approved `2026-11-26`). Day 1 implements `crates/protocol`; `crypto`, `network`, `relay`, and `client` crates remain scheduled for Days 2–3. Every capability is tracked honestly across `PROJECT_STATUS.md` and `TEST_RESULTS.md`.
 
 ---
 
@@ -22,7 +22,7 @@ In standard direct client-to-server TCP/TLS connections, a single destination se
 ### A.4 Non-Goals (Explicit Exclusions)
 - **Not a Tor Replacement or Global Anonymity Network:** With a small relay set, Private-Relay **does not** defend against global passive observers or dual-ended timing correlation.
 - **No Custom Cryptographic Primitives:** Zero bespoke ciphers, hash functions, or non-standard AEAD modes.
-- **No Interactive TCP Stream Multiplexing in v0.1 (`Decision D-01`):** v0.1 forwards bounded request/response payloads (`<= 64 KiB`) rather than arbitrary long-lived TCP streams (`SSH`, video streaming). Cells carry a `stream_id` field so stream support remains structurally extensible in future revisions.
+- **No Interactive TCP Stream Multiplexing in v0.1 (`Approved Decision D-01`):** Peer links run over persistent bidirectional TCP connections, while application payloads in `v0.1` are strictly bounded request/response transfers (`<= 64 KiB` request, `<= 64 KiB` response, `<= 140` chunks) correlated by `request_id` (`u32`). Arbitrary long-lived multiplexed streams (`SSH`, video streaming) and `SENDME` window/credit flow control are explicitly deferred to `v0.2+`.
 - **No Cover Traffic / Mix Batching in v0.1:** Fixed-size outer link frames normalize individual packet sizes, but intentional mix delays and dummy cover cells are deferred (`Planned`).
 
 ### A.5 Intended Use Cases
@@ -54,27 +54,35 @@ Client  ──(Noise_IK + Layered AEAD)──▶  Entry Relay  ──▶  Middle
 1. Every adjacent peer pair (`Client↔Entry`, `Entry↔Middle`, `Middle↔Exit`) communicates over a persistent **TCP connection**.
 2. Immediately upon TCP connect, peers perform an authenticated **Noise Protocol** handshake:
    - `Relay ↔ Relay` and `Client → Relay` (when relay static public key is known from descriptor): **`Noise_IK_25519_ChaChaPoly_BLAKE2s`** (1-RTT, forward secret, authenticates responder's static key and verifies peer link channel).
-3. Over an established Noise transport session, all frames are transmitted as **fixed-length `600`-byte outer Noise-encrypted link frames**:
+3. Over an established Noise transport session, all frames are transmitted as **fixed-length `600`-byte total on-wire Noise link records (`Approved Decision D-02`):**
    ```text
-   Outer Link Frame Plaintext (584 bytes before 16B Noise link tag -> 600B ciphertext + 2B length prefix)
+   Complete On-Wire TCP Frame Record = 600 bytes exact
+   +--------------------+-----------------------------------------------------------------+
+   | outer_len (u16 BE) | noise_ciphertext (598B = 582B outer plaintext + 16B Noise MAC)  |
+   | value MUST == 598  |                                                                 |
+   +--------------------+-----------------------------------------------------------------+
+
+   Outer Frame Plaintext (582 bytes exact before 16B Noise link tag)
    +---------------+---------------------+-------------------------------+
-   | real_len (u16)| inner_cell (<=582B) | random_padding (to 584 bytes) |
+   | real_len (u16)| inner_cell (<=580B) | random_padding (to 582 bytes) |
+   | value 9..=580 |                     |                               |
    +---------------+---------------------+-------------------------------+
    ```
-   *Purpose:* Passive observers on the TCP wire see uniform `602`-byte TCP records for control cells, `EXTEND` handshakes, and data cells alike.
+   *Arithmetic Check:* `2 (outer_len) + 582 (outer_plaintext) + 16 (Noise_IK MAC) = 600 bytes exact`.
+   *Purpose:* Passive observers on the TCP wire see uniform **`600`-byte** TCP records for control cells, `EXTEND` handshakes, and data cells alike. Any incoming TCP frame whose `outer_len != 598` is rejected immediately without decrypting or allocating unbounded buffers.
 
 ### C.2 Wire Cell Format (Inside Outer Link Frame)
-All overlay cells carry a common `9`-byte header followed by a command-specific body:
+All overlay cells carry a common `9`-byte header followed by a command-specific body (max encoded cell size `9 + 571 = 580` bytes):
 
 ```text
 +--------------------+---------------+-------------------+-----------------------------+
 | circuit_id (u32)   | version (u8)  | command (u8)      | payload_len (u16)           |
 +--------------------+---------------+-------------------+-----------------------------+
-| flags (u8)         | body (variable up to 573 bytes; total frame padded to 584B)     |
+| flags (u8)         | body (variable up to 571 bytes; outer frame padded to 582B)     |
 +--------------------+-----------------------------------------------------------------+
 ```
 
-* **`circuit_id` (`u32`):** Link-local circuit identifier. Chosen independently per link (`C1` on `Client↔Entry`, `C2` on `Entry↔Middle`, `C3` on `Middle↔Exit`). Must be non-zero; MSB indicates link initiator (`0` or `1`) to prevent ID collisions when two relays connect concurrently.
+* **`circuit_id` (`u32`):** Link-local circuit identifier. Chosen independently per link (`C1` on `Client↔Entry`, `C2` on `Entry↔Middle`, `C3` on `Middle↔Exit`). Must be non-zero; MSB indicates link initiator (`0` or `1`) to prevent ID collisions when two relays connect concurrently. Authenticated on each link by `Noise_IK`.
 * **`version` (`u8`):** Protocol version (`0x01`). Unknown versions cause immediate cell rejection and circuit teardown.
 * **`command` (`u8`):**
   - `0x01` `CREATE` — Client initiates inner `Noise_NK` handshake step 1 with Entry (`msg1`).
@@ -89,21 +97,24 @@ All overlay cells carry a common `9`-byte header followed by a command-specific 
 2. **Hop 2 (`Client ↔ Entry ↔ Middle`):** Client encrypts `EXTEND(middle_relay_id, Noise_NK_msg1_to_Middle)` under `K_fwd_1` inside a `RELAY_DATA` / `EXTEND` envelope. Entry peels `K_fwd_1`, looks up `middle_addr` (ensuring existing or new `Noise_IK` link to Middle), picks unused `C2`, sends `CREATE(C2, Noise_NK_msg1_to_Middle)`. Middle stores `(C2, K_fwd_2, K_bwd_2)` and returns `CREATED(C2, Noise_NK_msg2)`. Entry wraps `msg2` with `K_bwd_1` and returns `EXTENDED(C1, ...)` to Client.
 3. **Hop 3 (`Client ↔ Entry ↔ Middle ↔ Exit`):** Client wraps `EXTEND(exit_relay_id, Noise_NK_msg1_to_Exit)` under `K_fwd_2` then `K_fwd_1`. Entry peels `K_fwd_1`, Middle peels `K_fwd_2`, Middle creates `C3` with Exit via `CREATE(C3, msg1)`, and `EXTENDED` propagates backward (`K_bwd_2`, `K_bwd_1`) to Client.
 
-### C.4 Request & Response Forwarding (`Decision D-01`: Bounded Request/Response)
-Inside the innermost decrypted payload at `Exit` (and Client on response):
+### C.4 Request & Response Forwarding (`Approved Decision D-01`: Bounded Request/Response)
+Inside the innermost decrypted hop payload (`1B` `RelaySubCommand::Stream = 0x03` + up to `496` bytes `InnerPayload`):
 
 ```text
-Inner Payload (max 492 bytes per cell)
-+----------------+----------------+------------------+----------------------------+
-| request_id u32 | chunk_seq u16  | inner_flags u8   | fragment (<= 485 bytes)    |
-+----------------+----------------+------------------+----------------------------+
-  inner_flags: bit 0 = FIRST (includes target_addr_len + target_addr + port on req)
+Inner Payload (max 496 bytes per cell; total overhead across 3 hops = 3 × 25B = 75B -> 75 + 496 = 571B body)
++----------------+----------------+---------------+------------------+------------------------+
+| request_id u32 | chunk_index u16| chunk_count u16| inner_flags u8  | fragment (<= 487B)     |
++----------------+----------------+---------------+------------------+------------------------+
+  request_id:  non-zero u32 associating request chunks and returning response chunks
+  chunk_index: zero-based chunk index (0 .. chunk_count - 1)
+  chunk_count: total chunks in logical message (1 ..= 140)
+  inner_flags: bit 0 = FIRST (carries [target_len: u16][target_utf8 <= 255B] prefix on request chunk 0)
                bit 1 = FINAL (end of request / response message)
-               bit 2 = ERROR (Exit returns sanitized error code if Destination fails)
+               bit 2 = ERROR (Exit returns sanitized 1B StreamErrorCode if Destination fails)
 ```
 
-1. **Request Forwarding:** Client fragments a bounded request (`<= 64 KiB`, `<= 140` cells) into `Inner Payload` chunks. For each cell, Client applies 3 AEAD layers (`Exit` `K_fwd_3`, then `Middle` `K_fwd_2`, then `Entry` `K_fwd_1`). Each relay verifies & strips its outer layer and forwards along its `(in_conn, in_cid) -> (out_conn, out_cid)` mapping. Exit reassembles up to `64 KiB`, enforces SSRF rules on `(target_host, target_port)`, connects to Destination, and transmits the request.
-2. **Response Forwarding:** Exit reads Destination's bounded response (`<= 64 KiB`, subject to read timeout), splits it into `Inner Payload` chunks with matching `request_id`, encrypts with `K_bwd_3`, and sends on `C3` toward Middle. Middle encrypts with `K_bwd_2` onto `C2`; Entry encrypts with `K_bwd_1` onto `C1`. Client peels `K_bwd_1`, `K_bwd_2`, `K_bwd_3` in order and reassembles the response.
+1. **Request Forwarding:** Client fragments a bounded request (`<= 64 KiB` body + `<= 257B` target header = `<= 65,793B`, requiring at most `ceil(65_793 / 487) = 136 <= 140` cells) into `Inner Payload` chunks. For each cell, Client applies 3 AEAD layers (`Exit` `K_fwd_3`, then `Middle` `K_fwd_2`, then `Entry` `K_fwd_1`), each prepending a `1B` `RelaySubCommand` inside ciphertext and `(seq: u64 + tag: 16B)`. Each relay verifies & strips its outer layer and forwards along its `(in_conn, in_cid) -> (out_conn, out_cid)` mapping. Exit reassembles up to `65,793` total request bytes (`<= 64 KiB` application body), enforces SSRF rules on `(target_host, target_port)`, connects to Destination, and transmits the request.
+2. **Response Forwarding:** Exit reads Destination's bounded response (`<= 64 KiB`, subject to read timeout, `<= 135 <= 140` chunks), splits it into `Inner Payload` chunks with matching `request_id`, encrypts with `K_bwd_3`, and sends on `C3` toward Middle. Middle encrypts with `K_bwd_2` onto `C2`; Entry encrypts with `K_bwd_1` onto `C1`. Client peels `K_bwd_1`, `K_bwd_2`, `K_bwd_3` in order and reassembles the response.
 
 ### C.5 Session Lifecycle & Termination
 - **Circuit Idle TTL:** Default `120s` since last valid cell; expired circuits send `DESTROY(IDLE_TIMEOUT)` in both directions and zeroize all key material.
@@ -178,7 +189,7 @@ Upon completing `Noise_NK` for hop `i ∈ {1, 2, 3}`:
 
 1. **Traffic Correlation & Timing Attacks:** An adversary observing both `Client ↔ Entry` and `Exit ↔ Destination` can match packet bursts and round-trip latencies despite 3-layer encryption. **Status:** *Unmitigated in v0.1.*
 2. **Packet Size & Cell Counting:** Outer fixed `600`-byte link frames hide individual cell types, **not** total request/response byte volume (`4` cells vs `80` cells reveals payload scale). **Status:** *Unmitigated without cover padding.*
-3. **Hop-Position Length Visibility Inside `Noise_IK`:** Because nested `ChaCha20-Poly1305` removes `16` bytes per hop inside the `584`-byte link envelope, `Entry` sees `544B` (`+24B` seq+tag × 3), `Middle` sees `520B`, and `Exit` sees `496B`. In our fixed 3-role topology (`Entry / Middle / Exit`) relays already know their role, **but** arbitrary `N`-hop anonymity requires constant-size Sphinx headers (`Future work`).
+3. **Hop-Position Length Visibility Inside `Noise_IK`:** Because nested `ChaCha20-Poly1305` encapsulation removes `25` bytes (`1B subcmd + 8B seq + 16B tag`) per hop inside the `571`-byte max cell body (`582`-byte padded outer plaintext), `Entry` sees up to `571B`, `Middle` sees `546B`, and `Exit` sees `521B` (decrypting to `<= 497B` including `1B` subcmd + `<= 496B` `InnerPayload`). In our fixed 3-role topology (`Entry / Middle / Exit`) relays already know their role, **but** arbitrary `N`-hop anonymity requires constant-size Sphinx headers (`Future work`).
 4. **Malicious / Colluding Relays (`Entry + Exit`):** If the same attacker controls both Entry and Exit, Entry knows client IP and Exit knows destination—timing correlation links the user cleanly.
 5. **Centralized Coordinator Risk (`Phase 5`):** A single directory service can perform **route-partitioning attacks** (serving different relay subsets to targeted users) unless descriptors carry multi-party consensus signatures or client-pinned directory hashes.
 6. **DNS & Network Metadata Leaks:** Client DNS is protected **only** if Destination resolution runs exclusively at Exit. Local OS telemetry, client clock skew, or non-tunneled background traffic on the client device still leak metadata outside Private-Relay.

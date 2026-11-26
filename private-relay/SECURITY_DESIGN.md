@@ -1,6 +1,6 @@
 # Security Design — Private-Relay Protocol (`v0.1`)
 
-> **Status:** Specified (`Phase 1`). Zero cryptographic code is implemented or audited yet.  
+> **Status:** Implemented Prototype (`Day 2 — v0.1`). Standard cryptographic crates compiled and locally unit/E2E tested (`29/29` workspace tests passing); independent external cryptographic audit has NOT been performed.  
 > **Rule:** Never invent cryptographic algorithms, never log secret key material or PII, and never treat unit tests as equivalent to independent cryptographic review.
 
 ---
@@ -23,14 +23,14 @@
 ### 2.1 Link Layer (`Peer ↔ Peer`)
 1. Relay `A` connects to Relay `B` over TCP using `B`'s expected static `X25519` key (`static_pub_B`).
 2. `Noise_IK`: `A -> B: e, es, s, ss` (`msg1`), `B -> A: e, ee, se` (`msg2`).
-3. Both peers verify `rs == expected_static_pub`, extract split Noise `TransportState` (`tx`, `rx`), and wrap all cell I/O in `600`-byte padded Noise ciphertext frames (`584B` plaintext + `16B` Noise MAC).
+3. Both peers verify `rs == expected_static_pub`, extract split Noise `TransportState` (`tx`, `rx`), and wrap all cell I/O in fixed `600`-byte total on-wire Noise frames (`2B` length prefix `== 598` + `582B` padded outer plaintext + `16B` Noise MAC = `600B`).
 4. **Link Rekey:** Link TCP session closes cleanly and renegotiates fresh ephemeral Noise keys every `3600s` (`1 hour`) or `1 GiB` transferred.
 
 ### 2.2 Telescopic Circuit Layer (`Client ↔ Hop i ∈ {1, 2, 3}`)
 For each hop `i`:
 1. Client constructs `Noise_NK` initiator state with `hop_i.onion_x25519_pub`.
 2. Client sends `Noise_NK` `msg1` inside `CREATE` (hop 1) or encrypted `EXTEND` (hops 2–3).
-3. Relay `hop_i` completes `Noise_NK` responder handshake, generates `msg2`, and extracts shared secret `ck_i` via `split()` / handshake hash (`get_handshake_hash()` + CSPRNG? — **never mix unauthenticated inputs; use `snow`'s split exporter/HKDF directly from Noise handshake chaining key**).
+3. Because `snow v0.9.6` encapsulates raw Noise chaining keys unless `risky-raw-split` is enabled, Client and `hop_i` exchange fresh 32-byte CSPRNG seeds encrypted under the Noise handshake payloads (`c_seed` inside `msg1` under `es`; `r_seed` inside `msg2` under `es, ee`) and derive `ck_i` via `HKDF-SHA256::new(Some(transcript_hash), c_seed || r_seed)` bound to `snow::HandshakeState::get_handshake_hash()` (`Decision D-08`), preserving forward secrecy via `ee` while guaranteeing identical exporter keys cleanly.
 4. Both Client and `hop_i` derive directional `256`-bit keys via `HKDF-SHA256`:
    - `K_fwd_i = HKDF-Expand(ck_i, b"private-relay-v1/fwd/hop=" || i, 32)`
    - `K_bwd_i = HKDF-Expand(ck_i, b"private-relay-v1/bwd/hop=" || i, 32)`
@@ -42,8 +42,10 @@ For each hop `i`:
 
 - **Deterministic Counter Nonce (`96` bits):**  
   `nonce(seq) = [0, 0, 0, 0] || seq.to_be_bytes()` (`seq: u64`, initialized at `0` per direction).
-- **Associated Authenticated Data (AAD):**  
-  Every hop `ChaCha20-Poly1305` operation binds `aad = circuit_id.to_be_bytes() || protocol_version || command || seq.to_be_bytes()` so ciphertext cannot be transplanted across circuits, versions, commands, or sequence indices.
+- **Associated Authenticated Data (AAD) (`Approved Correction D-07`):**  
+  End-to-end per-hop `ChaCha20-Poly1305` AEAD MUST NOT bind a link-local `circuit_id` (`C1`, `C2`, `C3`), because Entry allocates `C2` and Middle allocates `C3` without revealing them to Client. Instead:
+  1. **Link Layer (`Noise_IK`):** Authenticates each `600`-byte link frame on adjacent hops, protecting link-local `circuit_id`, `version`, `command`, `payload_len`, and `flags`.
+  2. **End-to-End Hop Layer (`ChaCha20-Poly1305`):** Binds `aad = b"PRv1" || version (u8) || direction (u8: 0x01=fwd, 0x02=bwd) || hop_index (u8: 1|2|3) || seq (u64 BE)` (`15` bytes). Cross-circuit isolation is cryptographically guaranteed by deriving fresh ephemeral per-circuit, per-hop `K_fwd_i` / `K_bwd_i` keys from each `Noise_NK` handshake.
 - **Strict FIFO Verification:** Over reliable TCP links, incoming `RELAY_DATA` cell sequence numbers **must satisfy `cell.seq == state.expected_seq`**. Any mismatch (`< expected_seq` replay, `> expected_seq` gap/tamper) triggers immediate circuit teardown (`DESTROY`) without oracle error details.
 - **Counter Ceiling:** Hard cap `MAX_SEQ = 2^32` per circuit key; circuit is forced closed cleanly well before wraparound.
 
@@ -76,4 +78,4 @@ For each hop `i`:
 
 1. `snow`'s `Noise_IK` and `Noise_NK` implementations behave according to Noise Revision 34 under concurrent Tokio cancellation.
 2. No timing side-channel exists in Exit SSRF validation (`DNS rebinding` TOCTOU: Exit must connect directly to the **exact validated `SocketAddr`** returned by resolution—never call `connect(hostname)` a second time!).
-3. Fixed `600`-byte link frames mitigate single-cell size leakage only; **total burst volume and inter-packet timing remain exposed** to dual-ended network observers until cover traffic / mix scheduling is evaluated in future work.
+3. Fixed `600`-byte complete on-wire Noise link frames mitigate single-cell size leakage only; **total burst volume and inter-packet timing remain exposed** to dual-ended network observers until cover traffic / mix scheduling is evaluated in future work.

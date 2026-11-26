@@ -1,0 +1,14 @@
+[package]
+name = "private-relay-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Relay engine supporting Entry, Middle, and Exit roles over Noise links"
+
+[dependencies]
+private-relay-protocol = { workspace = true }
+private-relay-crypto = { workspace = true }
+private-relay-network = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

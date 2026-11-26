@@ -14,7 +14,7 @@
 3. **Required Security Property:** Confidentiality of payloads/destinations against single-point wiretaps; honest disclosure of dual-ended correlation risk.
 4. **Proposed Mitigation:** Fixed-size `600`-byte Noise link frames conceal internal handshake vs. data cell types; end-to-end TLS from Client to Destination protects application contents even past Exit.
 5. **Remaining Limitations:** **Unmitigated against dual-ended timing and volume correlation.** No dummy cover traffic or mix delays exist in `v0.1`.
-6. **How to Test the Mitigation:** Automated packet-size invariance test asserting that `CREATE`, `EXTEND`, and `RELAY_DATA` cells all serialize to identical outer link wire length (`602` bytes on TCP stream), plus documented correlation demo test showing timing alignment across Entry and Exit captures.
+6. **How to Test the Mitigation:** Automated packet-size invariance test asserting that `CREATE`, `EXTEND`, and `RELAY_DATA` cells all serialize to identical `582`-byte outer plaintext (`600`-byte complete link wire record including `2B` prefix + `16B` MAC), plus correlation visibility notes across Entry and Exit captures.
 
 ---
 

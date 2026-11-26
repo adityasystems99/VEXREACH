@@ -2,8 +2,8 @@
 
 A research-oriented, 3-hop privacy-preserving relay overlay (`Client → Entry → Middle → Exit → Destination`) engineered in Rust with Noise Protocol handshakes and per-hop authenticated encryption.
 
-> **Current Phase:** **Phase 1 & Phase 2 Complete → Ready for Phase 3 (`Cargo` Workspace & First Crate)**  
-> **Code Status:** Architecture, cryptographic design, threat model, MVP requirements, and continuity logs are complete (`0` Rust implementation crates coded yet).
+> **Current Phase:** **Day 2 Complete (`protocol`, `crypto`, `network`, `relay`, `client` verified, `29/29` tests passing) → Ready for Day 3 (CLI & Demo Release)**  
+> **Code Status:** Reconciled `v0.1` wire framing (`D-01`, `D-02`, `D-07`, `D-08`) and implemented end-to-end 3-hop Noise-encrypted relay & client prototype; CLI demo binaries and Day 3 release soak scheduled next.
 
 ---
 
@@ -21,7 +21,7 @@ A research-oriented, 3-hop privacy-preserving relay overlay (`Client → Entry �
 
 ### Continuity & Tracking Files
 - [PROJECT_STATUS.md](./PROJECT_STATUS.md) — Current phase and completed/pending/deferred breakdown.
-- [DECISIONS.md](./DECISIONS.md) — Architectural decision log (`D-01`..`D-06`).
+- [DECISIONS.md](./DECISIONS.md) — Architectural decision log (`D-01`..`D-08`).
 - [ROADMAP.md](./ROADMAP.md) — Phase 1–12 roadmap and capability status matrix.
 - [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) — Open limitations, correlation risks, and SSRF/TOCTOU constraints.
 - [TEST_RESULTS.md](./TEST_RESULTS.md) — Verified environment checks and future test results.
