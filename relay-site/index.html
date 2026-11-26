@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Relay Protocol</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Pinyon+Script&family=Inter:wght@400;500;600&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+
+<body>
+  <canvas id="scene" aria-hidden="true"></canvas>
+  <div id="journey">
+    <div class="stage">
+      <div id="copy"></div>
+      <div id="petal-frames" aria-label="Protocol features and start option"></div>
+      <div id="petal-detail" aria-live="polite" hidden></div>
+      <div id="start-panel" role="dialog" aria-modal="false" aria-labelledby="start-panel-title" hidden></div>
+      <div id="progress"></div>
+    </div>
+  </div>
+  <main id="features"></main>
+  <script type="module" src="/src/main.js"></script>
+</body>
+
+</html>
