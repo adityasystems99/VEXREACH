@@ -1,0 +1,14 @@
+# Architectural Decision Record (`DECISIONS.md`)
+
+Every major design choice for **Private-Relay** is logged here with rationale, alternatives rejected, consequences, and reversibility conditions.
+
+---
+
+| ID | Decision | Alternatives Considered | Rationale & Consequences | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **`D-01`** | **Bounded Request/Response (`<= 64 KiB`) in `v0.1` (`InnerPayload` chunks over fixed cells)** | Full bidirectional TCP stream multiplexing (SOCKS5 + `SENDME` windows) | *Rationale:* Proves 3-hop crypto, return routing, Exit DNS, and SSRF policy cleanly in Phases 3–5 without TCP-over-TCP flow-control deadlock risk. *Consequence:* Long-lived streaming protocols (`SSH`, video) deferred; cell headers keep `request_id`/flags cleanly extensible. | **Proposed (Awaiting Final Confirm before Phase 3/4)** |
+| **`D-02`** | **`Noise_IK` (link transport) + `Noise_NK` (telescopic hops) + nested `ChaCha20-Poly1305` inside `600B` padded outer frames** | Raw TLS 1.3 + Tor `AES-CTR` running digest; custom Sphinx packet header | *Rationale:* Pure reviewed primitives via `snow` + RustCrypto; eliminates tagging/malleability bugs (`Poly1305` per hop) and X.509 cert friction in `v0.1`. *Consequence:* Nested tags shrink max inner body `24B/hop`, revealing hop role (`Entry/Middle/Exit`) inside outer Noise frames—acceptable for fixed 3-role topology, while variable `N`-hop anonymity requires Sphinx later. | **Accepted for v0.1** |
+| **`D-03`** | **Pure-Rust Crypto (`snow`, `chacha20poly1305`, `hkdf`, `zeroize`) over C FFI (`ring`/`openssl`)** | `ring`, `openssl` | *Rationale:* Smooth compilation on Windows MSVC (`rustc 1.93.1` + VS2022 `link.exe`) with zero external C SDK headaches. | **Accepted for v0.1** |
+| **`D-04`** | **Static TOML Directory in `v0.1`; Evaluate Centralized vs. Federated Directory in `Phase 6`** | Building Axum + PostgreSQL Coordinator in Phase 1 | *Rationale:* Avoids premature distributed systems complexity; `Phase 6` will explicitly address single-coordinator route-partitioning trust risks via signed/federated directories before production use. | **Accepted** |
+| **`D-05`** | **Single Parameterized `relay` Crate (`role = entry \| middle \| exit`)** | Three separate binaries/crates upfront | *Rationale:* Prevents duplicated socket/Noise/circuit code across 3 hops while preserving strict runtime role boundaries (`Exit` policy enabled only when `role = exit`). | **Accepted** |
+| **`D-06`** | **Defer Live Kubernetes Deployments & Live LLM Credentials Until Explicitly Authorized** | Writing Helm/K8s manifests & live LLM clients upfront | *Rationale:* Protects architectural focus; future containers/configs remain K8s-friendly and LLM abstractions remain purely optional/mocked without touching security-critical relay paths. | **Accepted (Rule Lock)** |
