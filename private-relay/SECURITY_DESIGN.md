@@ -1,6 +1,6 @@
 # Security Design — Private-Relay Protocol (`v0.1`)
 
-> **Status:** Implemented Prototype (`Day 2 — v0.1`). Standard cryptographic crates compiled and locally unit/E2E tested (`29/29` workspace tests passing); independent external cryptographic audit has NOT been performed.  
+> **Status:** Implemented Prototype (`Day 3 — v0.1`). Standard cryptographic crates compiled and locally unit/E2E/multi-process tested (`40/40` workspace tests passing + 10-case Windows demo verified); independent external cryptographic audit has NOT been performed.  
 > **Rule:** Never invent cryptographic algorithms, never log secret key material or PII, and never treat unit tests as equivalent to independent cryptographic review.
 
 ---
@@ -57,9 +57,9 @@ For each hop `i`:
 2. **Client Unlinkability:** Client **never** uses a static identity key in `Noise_NK` circuit handshakes, and on `Client → Entry` `Noise_IK` links in `v0.1` the Client uses a fresh **per-session ephemeral static keypair** rather than a persistent machine key—preventing cross-session Client tracking at `Entry`.
 3. **Exit SSRF & DNS Isolation Boundary:**
    - Client serializes target hostname as a UTF-8 string inside Exit-encrypted `InnerPayload::Begin`—never resolving DNS on the client.
-   - Exit resolves DNS strictly over configured safe resolvers and checks **every** returned `IpAddr` before `TcpStream::connect`:
-     - **IPv4 Denied:** `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, `224.0.0.0/4`, `240.0.0.0/4`.
-     - **IPv6 Denied (Default):** `::/128`, `::1/128`, `fe80::/10` (link-local), `fc00::/7` (ULA), `ff00::/8` (multicast), IPv4-mapped `::ffff:0:0/96` wrapping any private IPv4 above. *(Loopback override strictly gated behind test-only feature/config flag `allow_loopback_for_test = false`.)*
+    - Exit resolves DNS strictly over configured safe resolvers inside `timeout(dest_timeout, ...)` (`SEC-201`), checks **every** returned `IpAddr` before `TcpStream::connect(validated_addr)`, and denies private/reserved ranges:
+      - **IPv4 Denied:** `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `224.0.0.0/4`, `240.0.0.0/4`.
+      - **IPv6 Denied (Default):** `::/128`, `::1/128`, `64:ff9b::/96` (NAT64), `fe80::/10` (link-local), `fc00::/7` (ULA), `ff00::/8` (multicast), `2001:db8::/32`, IPv4-mapped `::ffff:0:0/96` wrapping any private/reserved IPv4 above. *(Loopback override strictly gated behind test-only flag `allow_loopback_for_test = false`.)*
 
 ---
 

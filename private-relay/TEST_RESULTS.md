@@ -76,30 +76,32 @@
 | Command | Target | Observed Output | Status |
 | :--- | :--- | :--- | :--- |
 | `cargo fmt --all -- --check` | Full 6-crate workspace | Exit code `0` (no formatting diff) | **Passed** |
-| `cargo clippy --offline --workspace --all-targets -- -D warnings` | Full 6-crate workspace + 6 binaries | Finished `dev` profile in `30.13s` (`0` warnings, exit `0`) | **Passed** |
-| `cargo test --offline --workspace` | All 6 workspace crates | `39 passed; 0 failed; 0 ignored` | **Passed** |
-| `powershell -ExecutionPolicy Bypass -File .\demo\run-demo.ps1 -AutoStartStop` | Live 5-process OS demo on Windows | `demo-dest`, `relay-exit`, `relay-middle`, `relay-entry`, `relay-client` passed all `10/10` scenarios + clean process stop | **Passed** |
+| `cargo clippy --offline --workspace --all-targets -- -D warnings` | Full 6-crate workspace + 6 binaries | Finished `dev` profile in `9.81s` (`0` warnings, exit `0`) | **Passed** |
+| `cargo test --offline --workspace` | All 6 workspace crates | `40 passed; 0 failed; 0 ignored` | **Passed** |
+| `powershell -ExecutionPolicy Bypass -File .\demo\run-demo.ps1 -AutoStartStop` | Live 5-process OS demo on Windows | `demo-dest`, `relay-exit`, `relay-middle`, `relay-entry`, `relay-client` passed all `10/10` scenarios + relay log proofs (`circuit_hops=10` each) + clean stop | **Passed** |
 
-### Day 3 New Tests Added Across Crates (`+10` Tests -> Total `39/39`)
+### Day 3 Tests Added Across Crates (`+11` Tests -> Total `40/40`)
 - **`crates/crypto/tests/crypto_tests.rs` (`6 passed; 0 failed`):**
   - Added `static_keypair_rejects_mismatched_and_zero_keys`
   - Added `link_rekey_synchronization_boundary_simultaneous_and_fail_closed`
 - **`crates/network/tests/network_tests.rs` (`5 passed; 0 failed`):**
   - Added `tcp_link_rekey_byte_limit_simultaneous_and_interrupted_failure`
   - Added `config_rejects_invalid_roles_mismatched_keys_loop_and_bounds`
-- **`crates/relay/tests/relay_tests.rs` (`5 passed; 0 failed`):**
-  - Added `entry_enforces_max_concurrent_connections_limit`
+- **`crates/relay/tests/relay_tests.rs` (`6 passed; 0 failed`):**
+  - Added `entry_enforces_max_concurrent_connections_limit` (including `active_connection_count()` saturation and permit restoration)
+  - Added `exit_enforces_destination_timeout_and_cleans_up_circuit` (`SEC-201` timeout & `active_circuit_count()` release)
 - **`crates/client/tests/integration_tests.rs` (`10 passed; 0 failed`):**
   - Added `e2e_three_hop_survives_automatic_link_rekeys`
   - Added `e2e_redirect_response_is_not_followed_to_ssrf_target`
 - **`crates/cli/tests/cli_tests.rs` (`3 passed; 0 failed`):**
   1. `cli_arg_parsing_and_url_validation_unit_checks` — Passed (flags, URL schemes/IPv6/userinfo rejection, `--data-bytes` limit)
   2. `cli_rejects_missing_config_wrong_role_and_bad_keys` — Passed (OS subprocess error exit checks + `--check-only`)
-  3. `multi_process_os_three_hop_demo_and_failure_scenarios` — Passed (5 separate OS processes: `/health`, `0B`, `65_536B`, `/max-64kib`, `/redirect-ssrf`, `65_537B` reject, `/oversized` abort, `/slow` timeout, `PolicyDenied`, `ConnectFailed`, mid-flight Middle process kill)
+  3. `multi_process_os_three_hop_demo_and_failure_scenarios` — Passed (4 unique server/relay OS PIDs + client: `/health`, `0B`, `65_536B`, `/max-64kib`, `/redirect-ssrf`, `65_537B` reject, `/oversized` abort, `/slow` timeout, `PolicyDenied`, `ConnectFailed`, mid-flight Middle kill, plus verified `STATUS=READY`, `"relay node started"`, `"circuit hop established"` across Entry/Middle/Exit logs with zero leaked IPs/paths/bodies/keys)
 
 ### Live Windows PowerShell Demo Transcript Summary (`demo/run-demo.ps1 -AutoStartStop`)
-- Ephemeral keygen (`demo/generated/`, gitignored) + 4 background OS processes (`demo-dest PID=29600`, `relay-exit PID=37524`, `relay-middle PID=8948`, `relay-entry PID=30732`) started and torn down cleanly via `stop-demo.ps1`.
-- Executed scenarios `1..10`: empty `0B` (`104ms`), `/health` (`86ms`, `HTTP/1.1 200 OK`, `142B`), `/medium` (`165ms`, `12375B`), exact `65536B` raw (`579ms`, `65536B`), `/max-64kib` (`358ms`, `65536B`), `/redirect-ssrf` (`88ms`, `302 Found` unfollowed), `65537B` (`REJECTED_LOCALLY`), unlisted target `127.0.0.1:9099` (`PolicyDenied`), `/oversized` (`PayloadTooLarge`), and `/slow` (`Timeout`, `2586ms`).
+- Ephemeral keygen (`demo/generated/`, gitignored) + 4 background OS processes (`demo-dest PID=39460`, `relay-exit PID=39500`, `relay-middle PID=45592`, `relay-entry PID=42288`) started and torn down cleanly via `stop-demo.ps1`.
+- Executed scenarios `1..10`: empty `0B` (`137ms`), `/health` (`99ms`, `HTTP/1.1 200 OK`, `142B`), `/medium` (`168ms`, `12375B`), exact `65536B` raw (`675ms`, `65536B`), `/max-64kib` (`375ms`, `65536B`), `/redirect-ssrf` (`98ms`, `302 Found` unfollowed), `65537B` (`REJECTED_LOCALLY`, `81ms`), unlisted target `127.0.0.1:9099` (`PolicyDenied`, `89ms`), `/oversized` (`PayloadTooLarge`, `94ms`), and `/slow` (`Timeout`, `2601ms`).
+- Multi-process log verification in `demo/logs/`: `relay-entry`, `relay-middle`, and `relay-exit` each recorded `STATUS=READY` and `circuit_hops=10` without logging IP addresses, target paths, payloads, or key hex values.
 
 ---
 
@@ -107,5 +109,5 @@
 
 | Suite | Target Phase | Status | Notes |
 | :--- | :--- | :--- | :--- |
-| Multi-host WAN soak benchmarks & Prometheus metrics | Phase 6–8 | **Not Yet Executed** | Deferred beyond `v0.1` local prototype |
-| Fuzzing (`cargo-fuzz`) & third-party security audit | Pre-Production | **Not Yet Executed** | Required before any non-research deployment |
+| Multi-host WAN soak benchmarks, Docker containers & K8s/Prometheus | Phase 6–8 | **Not Yet Executed / Deferred** | `dockerDesktopLinuxEngine` offline on host (`DEFERRED`); Kubernetes, Prometheus, and LLM integration excluded from Day 3 scope |
+| Fuzzing (`cargo-fuzz`), `cargo-audit` & third-party security audit | Pre-Production | **Not Yet Executed** | `cargo-audit`/`cargo-deny` absent offline; required before any non-research deployment |

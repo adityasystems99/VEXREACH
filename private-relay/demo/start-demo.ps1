@@ -1,6 +1,8 @@
 param(
     [switch]$RotateKeys,
-    [int]$DestTimeoutMs = 3000
+    [int]$DestTimeoutMs = 3000,
+    [ValidateSet("error", "warn", "info", "debug")]
+    [string]$LogLevel = "debug"
 )
 
 $ErrorActionPreference = "Stop"
@@ -82,19 +84,19 @@ try {
     Wait-TcpPort -Process $DestProc -ErrLogPath $DestErr -HostAddr "127.0.0.1" -Port 9000
 
     $ExitProc = Start-Process -FilePath (Join-Path $TargetBin "relay-exit.exe") `
-        -ArgumentList @("--config", $ExitCfgArg) `
+        -ArgumentList @("--config", $ExitCfgArg, "--log-level", $LogLevel) `
         -RedirectStandardOutput $ExitOut -RedirectStandardError $ExitErr -PassThru -WindowStyle Hidden
     $StartedProcs += $ExitProc
     Wait-TcpPort -Process $ExitProc -ErrLogPath $ExitErr -HostAddr "127.0.0.1" -Port 9103
 
     $MidProc = Start-Process -FilePath (Join-Path $TargetBin "relay-middle.exe") `
-        -ArgumentList @("--config", $MidCfgArg) `
+        -ArgumentList @("--config", $MidCfgArg, "--log-level", $LogLevel) `
         -RedirectStandardOutput $MidOut -RedirectStandardError $MidErr -PassThru -WindowStyle Hidden
     $StartedProcs += $MidProc
     Wait-TcpPort -Process $MidProc -ErrLogPath $MidErr -HostAddr "127.0.0.1" -Port 9102
 
     $EntProc = Start-Process -FilePath (Join-Path $TargetBin "relay-entry.exe") `
-        -ArgumentList @("--config", $EntCfgArg) `
+        -ArgumentList @("--config", $EntCfgArg, "--log-level", $LogLevel) `
         -RedirectStandardOutput $EntOut -RedirectStandardError $EntErr -PassThru -WindowStyle Hidden
     $StartedProcs += $EntProc
     Wait-TcpPort -Process $EntProc -ErrLogPath $EntErr -HostAddr "127.0.0.1" -Port 9101

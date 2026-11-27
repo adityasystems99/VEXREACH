@@ -1,4 +1,5 @@
-use std::fs;
+use std::collections::HashSet;
+use std::fs::{self, File};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -260,41 +261,62 @@ fn multi_process_os_three_hop_demo_and_failure_scenarios() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    let dest_pid = dest_child.id();
     children.push(dest_child);
     wait_tcp_ready(&dest_addr, Duration::from_secs(5));
 
-    // 2. Spawn Exit Relay OS process.
+    // 2. Spawn Exit Relay OS process with redirected stdout/stderr logs.
+    let exit_out_path = tmp.0.join("exit.out.log");
+    let exit_err_path = tmp.0.join("exit.err.log");
     let exit_child = Command::new(env!("CARGO_BIN_EXE_relay-exit"))
         .arg("--config")
         .arg(tmp.0.join("exit.toml"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .arg("--log-level")
+        .arg("debug")
+        .stdout(Stdio::from(File::create(&exit_out_path).unwrap()))
+        .stderr(Stdio::from(File::create(&exit_err_path).unwrap()))
         .spawn()
         .unwrap();
+    let exit_pid = exit_child.id();
     children.push(exit_child);
     wait_tcp_ready(&exit_addr, Duration::from_secs(5));
 
-    // 3. Spawn Middle Relay OS process.
+    // 3. Spawn Middle Relay OS process with redirected stdout/stderr logs.
+    let middle_out_path = tmp.0.join("middle.out.log");
+    let middle_err_path = tmp.0.join("middle.err.log");
     let mid_child = Command::new(env!("CARGO_BIN_EXE_relay-middle"))
         .arg("--config")
         .arg(tmp.0.join("middle.toml"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .arg("--log-level")
+        .arg("debug")
+        .stdout(Stdio::from(File::create(&middle_out_path).unwrap()))
+        .stderr(Stdio::from(File::create(&middle_err_path).unwrap()))
         .spawn()
         .unwrap();
+    let middle_pid = mid_child.id();
     let mid_idx = children.push(mid_child);
     wait_tcp_ready(&mid_addr, Duration::from_secs(5));
 
-    // 4. Spawn Entry Relay OS process.
+    // 4. Spawn Entry Relay OS process with redirected stdout/stderr logs.
+    let entry_out_path = tmp.0.join("entry.out.log");
+    let entry_err_path = tmp.0.join("entry.err.log");
     let entry_child = Command::new(env!("CARGO_BIN_EXE_relay-entry"))
         .arg("--config")
         .arg(tmp.0.join("entry.toml"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .arg("--log-level")
+        .arg("debug")
+        .stdout(Stdio::from(File::create(&entry_out_path).unwrap()))
+        .stderr(Stdio::from(File::create(&entry_err_path).unwrap()))
         .spawn()
         .unwrap();
+    let entry_pid = entry_child.id();
     children.push(entry_child);
     wait_tcp_ready(&entry_addr, Duration::from_secs(5));
+
+    let unique_pids: HashSet<u32> = [dest_pid, exit_pid, middle_pid, entry_pid]
+        .into_iter()
+        .collect();
+    assert_eq!(unique_pids.len(), 4);
 
     let client_cfg = tmp.0.join("client.toml");
 
@@ -429,4 +451,56 @@ fn multi_process_os_three_hop_demo_and_failure_scenarios() {
         .output()
         .unwrap();
     assert!(!out_mid_dead.status.success());
+
+    // Stop child relay/destination processes and flush handles before verifying log evidence.
+    drop(children);
+
+    let entry_out = fs::read_to_string(&entry_out_path).unwrap();
+    let middle_out = fs::read_to_string(&middle_out_path).unwrap();
+    let exit_out = fs::read_to_string(&exit_out_path).unwrap();
+    assert!(entry_out.contains("STATUS=READY id=demo-entry-1 role=Entry"));
+    assert!(middle_out.contains("STATUS=READY id=demo-middle-1 role=Middle"));
+    assert!(exit_out.contains("STATUS=READY id=demo-exit-1 role=Exit"));
+
+    let entry_err = fs::read_to_string(&entry_err_path).unwrap();
+    let middle_err = fs::read_to_string(&middle_err_path).unwrap();
+    let exit_err = fs::read_to_string(&exit_err_path).unwrap();
+
+    for (label, log) in [
+        ("entry", &entry_err),
+        ("middle", &middle_err),
+        ("exit", &exit_err),
+    ] {
+        assert!(
+            log.contains("relay node started"),
+            "{label} missing startup log: {log}"
+        );
+        assert!(
+            log.contains("circuit hop established"),
+            "{label} missing circuit hop log: {log}"
+        );
+        assert!(
+            !log.contains("127.0.0.1")
+                && !log.contains("/health")
+                && !log.contains("private-relay-demo-dest"),
+            "{label} log leaked sensitive IP/path/payload: {log}"
+        );
+    }
+
+    // Verify no relay private/public keys leaked into any relay log file.
+    for cfg_name in ["entry.toml", "middle.toml", "exit.toml"] {
+        let raw_cfg = fs::read_to_string(tmp.0.join(cfg_name)).unwrap();
+        for line in raw_cfg.lines() {
+            if let Some((_, rhs)) = line.split_once("key_hex = ") {
+                let key_hex = rhs.trim().trim_matches('"');
+                assert!(key_hex.len() == 64);
+                for log in [&entry_err, &middle_err, &exit_err] {
+                    assert!(
+                        !log.contains(key_hex),
+                        "key hex leaked into relay stderr log"
+                    );
+                }
+            }
+        }
+    }
 }

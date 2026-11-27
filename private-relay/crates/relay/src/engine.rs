@@ -371,6 +371,13 @@ impl RelayHandle {
         self.runtime.active_circuits.load(Ordering::Acquire)
     }
 
+    pub fn active_connection_count(&self) -> usize {
+        self.runtime
+            .config
+            .max_concurrent_connections
+            .saturating_sub(self.runtime.conn_semaphore.available_permits())
+    }
+
     pub async fn shutdown(self) {
         let _ = self.shutdown_tx.send(true);
         let _ = self.accept_task.await;
@@ -1438,11 +1445,17 @@ async fn execute_destination_request(
 ) -> Result<Vec<u8>, private_relay_protocol::RequestErrorCode> {
     use private_relay_protocol::RequestErrorCode;
 
-    let validated_addr = match policy.resolve_and_validate(&req.target_host_port).await {
-        Ok(addr) => addr,
-        Err(NetworkError::PolicyDenied(_)) => return Err(RequestErrorCode::PolicyDenied),
-        Err(NetworkError::DnsResolutionFailed) => return Err(RequestErrorCode::DnsFailed),
-        Err(_) => return Err(RequestErrorCode::InternalError),
+    let validated_addr = match timeout(
+        dest_timeout,
+        policy.resolve_and_validate(&req.target_host_port),
+    )
+    .await
+    {
+        Ok(Ok(addr)) => addr,
+        Ok(Err(NetworkError::PolicyDenied(_))) => return Err(RequestErrorCode::PolicyDenied),
+        Ok(Err(NetworkError::DnsResolutionFailed)) => return Err(RequestErrorCode::DnsFailed),
+        Ok(Err(_)) => return Err(RequestErrorCode::InternalError),
+        Err(_) => return Err(RequestErrorCode::Timeout),
     };
 
     let mut stream = match timeout(dest_timeout, TcpStream::connect(validated_addr)).await {

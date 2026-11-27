@@ -45,6 +45,18 @@ try {
     Invoke-Case "9. Oversized destination response blocked at Exit (/oversized)" @("--config", $ClientCfg, "--url", "http://127.0.0.1:9000/oversized") $false
     Invoke-Case "10. Slow destination timeout enforced at Exit (/slow)" @("--config", $ClientCfg, "--url", "http://127.0.0.1:9000/slow") $false
 
+    $LogDir = Join-Path $PSScriptRoot "logs"
+    Write-Host "`n=== Multi-Process Relay Log Verification ==="
+    foreach ($node in @("entry", "middle", "exit")) {
+        $outLog = Get-Content -Path (Join-Path $LogDir "relay-$node.out.log") -Raw
+        $errLog = Get-Content -Path (Join-Path $LogDir "relay-$node.err.log") -Raw
+        if ($outLog -notmatch "STATUS=READY" -or $errLog -notmatch "relay node started" -or $errLog -notmatch "circuit hop established") {
+            throw "Multi-process log proof failed for relay-$node"
+        }
+        $hopCount = ([regex]::Matches($errLog, "circuit hop established")).Count
+        Write-Host ("  relay-{0}: STATUS=READY, circuit_hops={1}" -f $node, $hopCount)
+    }
+
     Write-Host "`nALL MULTI-PROCESS DEMO SCENARIOS PASSED."
 }
 finally {

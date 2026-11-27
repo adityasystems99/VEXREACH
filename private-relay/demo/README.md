@@ -6,7 +6,7 @@ This demo runs **5 separate Windows OS processes** communicating exclusively ove
 relay-client.exe ──▶ relay-entry.exe (:9101) ──▶ relay-middle.exe (:9102) ──▶ relay-exit.exe (:9103) ──▶ demo-dest.exe (:9000)
 ```
 
-> **Security Notice:** This is a local engineering demonstration (`allow_loopback_for_test = true`, explicit `allowed_targets = ["127.0.0.1:9000"]` at Exit). Private keys are generated locally at runtime into `demo/generated/` (gitignored) and are NEVER committed to the repository. Do NOT reuse demo configs/keys in production.
+> **Security & Config Note:** This is a local engineering demonstration (`allow_loopback_for_test = true`, explicit `allowed_targets = ["127.0.0.1:9000"]` at Exit). Static template files live in [demo/configs/](./configs/), while fresh ephemeral keys and active runtime TOML files (`entry.toml`, `middle.toml`, `exit.toml`, `client.toml`) are generated locally into `demo/generated/` (gitignored) and are NEVER committed to the repository. Do NOT reuse demo configs/keys in production. `start-demo.ps1` launches the three relays with `--log-level debug` into `demo/logs/` so `run-demo.ps1` verifies `STATUS=READY`, `"relay node started"`, and `"circuit hop established"` across all three independent OS processes without logging IPs, keys, or payloads.
 
 ---
 

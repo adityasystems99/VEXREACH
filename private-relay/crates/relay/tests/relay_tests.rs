@@ -268,7 +268,7 @@ async fn entry_enforces_max_concurrent_connections_limit() {
 
     // First client opens authenticated link and holds connection slot #1.
     let c1_kp = StaticKeypair::generate().unwrap();
-    let (_r1, _w1) = connect_noise_link(
+    let (r1, w1) = connect_noise_link(
         &entry.peer_descriptor().addr,
         &c1_kp,
         *entry_kp.public(),
@@ -276,6 +276,7 @@ async fn entry_enforces_max_concurrent_connections_limit() {
     )
     .await
     .unwrap();
+    assert_eq!(entry.active_connection_count(), 1);
 
     // Second concurrent TCP peer is dropped before Noise handshake due to max_concurrent_connections = 1.
     let c2_kp = StaticKeypair::generate().unwrap();
@@ -295,5 +296,103 @@ async fn entry_enforces_max_concurrent_connections_limit() {
             | private_relay_network::NetworkError::Io(_)
     ));
 
+    // Releasing connection #1 cleanly restores permit capacity to 0 active connections.
+    drop(r1);
+    drop(w1);
+    for _ in 0..20 {
+        if entry.active_connection_count() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(entry.active_connection_count(), 0);
+
     entry.shutdown().await;
+}
+
+#[tokio::test]
+async fn exit_enforces_destination_timeout_and_cleans_up_circuit() {
+    let slow_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let slow_addr = slow_listener.local_addr().unwrap();
+    let _server = tokio::spawn(async move {
+        if let Ok((mut s, _)) = slow_listener.accept().await {
+            let mut tmp = [0u8; 64];
+            let _ = s.read(&mut tmp).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    });
+
+    let exit_kp = StaticKeypair::generate().unwrap();
+    let mut exit_cfg = RelayConfig::with_generated_keypair(
+        "exit-timeout",
+        RelayRole::Exit,
+        "127.0.0.1:0",
+        &exit_kp,
+    );
+    exit_cfg.allow_loopback_for_test = true;
+    exit_cfg.allowed_targets = vec![slow_addr.to_string()];
+    exit_cfg.destination_io_timeout_ms = 120;
+    let exit = RelayServer::start(exit_cfg).await.unwrap();
+
+    let caller_kp = StaticKeypair::generate().unwrap();
+    let (mut reader, mut writer) = connect_noise_link(
+        &exit.peer_descriptor().addr,
+        &caller_kp,
+        *exit_kp.public(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+
+    let cid = CircuitId::from_role_bits(11, true).unwrap();
+    let mut init3 = HopHandshakeInitiator::new(3, *exit_kp.public()).unwrap();
+    writer
+        .send_cell(
+            &Cell::new(cid, Command::Create, 0, init3.write_msg1().unwrap()).unwrap(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+    let created = reader.recv_cell(Duration::from_secs(2)).await.unwrap();
+    let mut hop3 = init3.finish_with_msg2(&created.body).unwrap();
+    assert_eq!(exit.active_circuit_count(), 1);
+
+    let rid = RequestId::new(1).unwrap();
+    let chunks = chunk_request(rid, &slow_addr.to_string(), b"ping").unwrap();
+    for ch in chunks {
+        let pt = RelayHopPlaintext::Message(ch.encode().unwrap())
+            .encode()
+            .unwrap();
+        let sealed = hop3.forward.seal(&pt).unwrap();
+        writer
+            .send_cell(
+                &Cell::new(cid, Command::RelayData, 0, sealed).unwrap(),
+                Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+    }
+
+    let cell = reader.recv_cell(Duration::from_secs(2)).await.unwrap();
+    assert_eq!(cell.command, Command::RelayData);
+    let inner_pt = hop3.backward.open(&cell.body).unwrap();
+    let inner_bytes = match RelayHopPlaintext::decode(&inner_pt).unwrap() {
+        RelayHopPlaintext::Message(b) => b,
+        other => panic!("unexpected plaintext: {other:?}"),
+    };
+    let chunk = InnerPayload::decode(&inner_bytes).unwrap();
+    let mut reasm = MessageReassembler::for_response(rid);
+    let msg = reasm.push(chunk).unwrap().unwrap();
+    assert_eq!(msg, ReassembledMessage::Error(RequestErrorCode::Timeout));
+
+    drop(reader);
+    drop(writer);
+    for _ in 0..20 {
+        if exit.active_circuit_count() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(exit.active_circuit_count(), 0);
+    exit.shutdown().await;
 }

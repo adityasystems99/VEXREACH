@@ -9,14 +9,14 @@
 | Binary cell framing (`600B` total wire frames / `582B` plaintext) | Implemented Prototype (`Day 1`) | **Implemented & Tested (`10/10` protocol tests)** | Day 1 (`Complete`) |
 | `Noise_IK` link channel + coordinated link rekeying (`3600s` / `1 GiB`) | Established Tech (`snow v0.9.6`) + `D-09` | **Implemented & Tested (`Day 3`, `6/6` crypto + `5/5` net tests)** | Day 3 (`Complete`) |
 | `Noise_NK` telescopic hops + per-hop `ChaCha20-Poly1305` + `u64` replay | Established Tech + `D-07`/`D-08` | **Implemented & Tested (`Day 2`, `6/6` crypto tests)** | Day 2 (`Complete`) |
-| Single Rust relay (`CircuitTable`, conn semaphore, bounded queues, SSRF) | Implemented Prototype (`Day 2–3`) | **Implemented & Tested (`5/5` relay tests)** | Day 3 (`Complete`) |
-| Standalone CLI binaries + 5-process Windows local demo (`demo/`) | Implemented Prototype (`Day 3`) | **Implemented & Tested (`3/3` CLI tests + `10/10` PS demo cases)** | Day 3 (`Complete`) |
+| Single Rust relay (`CircuitTable`, conn semaphore, bounded queues, SSRF + DNS timeout) | Implemented Prototype (`Day 2–3`) | **Implemented & Tested (`6/6` relay tests)** | Day 3 (`Complete`) |
+| Standalone CLI binaries + 5-process Windows local demo (`demo/`) | Implemented Prototype (`Day 3`) | **Implemented & Tested (`3/3` CLI tests + log proof + `10/10` PS demo)** | Day 3 (`Complete`) |
 | Multi-hop request & response routing (`Client → Entry → Middle → Exit → Dest`) | Implemented Prototype (`Day 2–3`) | **Implemented & Tested (`10/10` client E2E + `3/3` CLI tests)** | Day 3 (`Complete`) |
-| Coordinator registry, operator diversity & failover | Proposed / Deferred | **Planned** | Phase 5 |
-| Privacy-preserving Prometheus aggregate metrics | Proposed / Deferred | **Planned** | Phase 6 |
-| Adversarial crypto, SSRF & DoS test harness | Proposed / Deferred | **Planned** | Phase 7 |
-| Multi-host Docker / TLS deployment | Proposed / Deferred | **Planned** | Phase 8 |
-| Live backend-connected frontend visualizer | Proposed / Deferred | **Planned** | Phase 9 |
+| Coordinator registry, operator diversity & failover | Proposed / Deferred | **Deferred** | Phase 5 |
+| Privacy-preserving Prometheus aggregate metrics & K8s | Proposed / Deferred | **Deferred (Excluded from Day 3)** | Phase 6 |
+| Adversarial crypto, SSRF & DoS test harness | Proposed / Deferred | **Deferred (`cargo-fuzz`/`cargo-audit` not run)** | Phase 7 |
+| Multi-host Docker / TLS deployment | Proposed / Deferred | **Deferred (Docker daemon offline locally)** | Phase 8 |
+| Live backend-connected frontend / LLM operational assistant | Proposed / Deferred | **Deferred (Excluded from Day 3)** | Phase 9 |
 | Sphinx constant-length `N`-hop headers / Cover traffic | Research Extension | **Experimental / Out of Scope for v0.1** | Beyond v0.1 |
 
 ---
