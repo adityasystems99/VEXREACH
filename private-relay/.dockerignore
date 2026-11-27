@@ -1,0 +1,7 @@
+target/
+.git/
+demo/generated/
+demo/logs/
+**/*.rs.bk
+*.pid
+*.log

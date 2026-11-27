@@ -6,8 +6,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use private_relay_cli::{
-    build_http_request_from_url, generate_demo_configs, parse_client_args, parse_relay_args,
-    LogLevel,
+    build_http_request_from_url, generate_demo_configs, generate_demo_configs_with_options,
+    parse_client_args, parse_relay_args, KeygenOptions, LogLevel,
 };
 
 struct ChildGuard(Vec<Child>);
@@ -82,17 +82,34 @@ fn cli_arg_parsing_and_url_validation_unit_checks() {
     let args = vec![
         "--config".into(),
         "entry.toml".into(),
+        "--listen".into(),
+        "0.0.0.0:9101".into(),
         "--log-level".into(),
         "debug".into(),
         "--check-only".into(),
     ];
     let parsed_relay = parse_relay_args("relay-entry", &args).unwrap();
     assert_eq!(parsed_relay.config_path, PathBuf::from("entry.toml"));
+    assert_eq!(
+        parsed_relay.listen_override.as_deref(),
+        Some("0.0.0.0:9101")
+    );
     assert_eq!(parsed_relay.log_level, Some(LogLevel::Debug));
     assert!(parsed_relay.check_only);
 
     assert!(parse_relay_args("relay-entry", &[]).is_err());
     assert!(parse_relay_args("relay-entry", &["--unknown".into()]).is_err());
+
+    // Client --probe mode parsing (no --config needed; mutually exclusive with request flags)
+    let probe_args = parse_client_args(&["--probe".into(), "127.0.0.1:9101".into()]).unwrap();
+    assert_eq!(probe_args.probe_addr.as_deref(), Some("127.0.0.1:9101"));
+    assert!(parse_client_args(&[
+        "--probe".into(),
+        "127.0.0.1:9101".into(),
+        "--config".into(),
+        "client.toml".into()
+    ])
+    .is_err());
 
     // Client CLI arg parsing
     let cargs = vec![
@@ -203,6 +220,34 @@ fn cli_rejects_missing_config_wrong_role_and_bad_keys() {
         .unwrap();
     assert!(cli_check.status.success());
     assert!(String::from_utf8_lossy(&cli_check.stdout).contains("CONFIG_OK"));
+
+    // 5. Split container directory generation writes isolated entry/middle/exit/client TOMLs cleanly.
+    let split_dir = tmp.0.join("split");
+    let opts = KeygenOptions {
+        entry_listen: "0.0.0.0:9101".into(),
+        middle_listen: "0.0.0.0:9102".into(),
+        exit_listen: "0.0.0.0:9103".into(),
+        allow_loopback_for_test: false,
+        allow_private_targets_for_test: true,
+        split_dirs: true,
+    };
+    generate_demo_configs_with_options(
+        &split_dir,
+        "relay-entry:9101",
+        "relay-middle:9102",
+        "relay-exit:9103",
+        vec!["demo-dest:9000".into()],
+        2500,
+        &opts,
+    )
+    .unwrap();
+    assert!(split_dir.join("entry/entry.toml").exists());
+    assert!(split_dir.join("middle/middle.toml").exists());
+    assert!(split_dir.join("exit/exit.toml").exists());
+    assert!(split_dir.join("client/client.toml").exists());
+    let exit_split_txt = fs::read_to_string(split_dir.join("exit/exit.toml")).unwrap();
+    assert!(exit_split_txt.contains("allow_loopback_for_test = false"));
+    assert!(exit_split_txt.contains("allow_private_targets_for_test = true"));
 }
 
 #[test]

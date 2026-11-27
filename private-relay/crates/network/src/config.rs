@@ -59,6 +59,8 @@ pub struct RelayConfig {
     #[serde(default)]
     pub allow_loopback_for_test: bool,
     #[serde(default)]
+    pub allow_private_targets_for_test: bool,
+    #[serde(default)]
     pub allowed_targets: Vec<String>,
     #[serde(default = "default_max_concurrent_connections")]
     pub max_concurrent_connections: usize,
@@ -129,6 +131,7 @@ impl RelayConfig {
             private_key_hex: encode_hex(keypair.secret_bytes()),
             allowed_next_peers: Vec::new(),
             allow_loopback_for_test: false,
+            allow_private_targets_for_test: false,
             allowed_targets: Vec::new(),
             max_concurrent_connections: default_max_concurrent_connections(),
             max_concurrent_circuits: default_max_concurrent_circuits(),
@@ -173,6 +176,12 @@ impl RelayConfig {
         if self.listen_addr.parse::<SocketAddr>().is_err() {
             return Err(NetworkError::Config(
                 "listen_addr must be a valid ip:port SocketAddr".into(),
+            ));
+        }
+        if self.allow_private_targets_for_test && self.allowed_targets.is_empty() {
+            return Err(NetworkError::Config(
+                "allow_private_targets_for_test requires non-empty allowed_targets allowlist"
+                    .into(),
             ));
         }
         let kp = self.keypair()?;

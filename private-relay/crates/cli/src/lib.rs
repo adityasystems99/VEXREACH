@@ -120,6 +120,7 @@ pub fn init_cli_logger(level_override: Option<LogLevel>) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayCliArgs {
     pub config_path: PathBuf,
+    pub listen_override: Option<String>,
     pub log_level: Option<LogLevel>,
     pub check_only: bool,
     pub show_help: bool,
@@ -128,6 +129,7 @@ pub struct RelayCliArgs {
 /// Parses arguments for `relay-entry`, `relay-middle`, or `relay-exit`.
 pub fn parse_relay_args(bin_name: &str, args: &[String]) -> Result<RelayCliArgs, String> {
     let mut config_path: Option<PathBuf> = None;
+    let mut listen_override: Option<String> = None;
     let mut log_level: Option<LogLevel> = None;
     let mut check_only = false;
     let mut i = 0;
@@ -137,6 +139,7 @@ pub fn parse_relay_args(bin_name: &str, args: &[String]) -> Result<RelayCliArgs,
             "-h" | "--help" => {
                 return Ok(RelayCliArgs {
                     config_path: PathBuf::new(),
+                    listen_override,
                     log_level,
                     check_only,
                     show_help: true,
@@ -148,6 +151,13 @@ pub fn parse_relay_args(bin_name: &str, args: &[String]) -> Result<RelayCliArgs,
                     .get(i)
                     .ok_or_else(|| format!("{bin_name}: --config requires a file path"))?;
                 config_path = Some(PathBuf::from(val));
+            }
+            "--listen" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or_else(|| format!("{bin_name}: --listen requires ip:port"))?;
+                listen_override = Some(val.clone());
             }
             "--log-level" => {
                 i += 1;
@@ -172,13 +182,44 @@ pub fn parse_relay_args(bin_name: &str, args: &[String]) -> Result<RelayCliArgs,
 
     Ok(RelayCliArgs {
         config_path,
+        listen_override,
         log_level,
         check_only,
         show_help: false,
     })
 }
 
-/// Executes a standalone relay binary for `expected_role`, validating config and handling Ctrl+C.
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    res = tokio::signal::ctrl_c() => {
+                        if res.is_err() {
+                            eprintln!("warning: Ctrl+C signal listener failed; initiating shutdown");
+                        }
+                    }
+                    _ = sigterm.recv() => {}
+                }
+            }
+            Err(_) => {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    eprintln!("warning: signal listener failed; initiating shutdown");
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        if tokio::signal::ctrl_c().await.is_err() {
+            eprintln!("warning: Ctrl+C signal listener failed; initiating shutdown");
+        }
+    }
+}
+
+/// Executes a standalone relay binary for `expected_role`, validating config and handling SIGINT/SIGTERM.
 pub async fn run_relay_cli(expected_role: RelayRole, bin_name: &str, args: &[String]) -> ExitCode {
     let parsed = match parse_relay_args(bin_name, args) {
         Ok(p) => p,
@@ -190,7 +231,7 @@ pub async fn run_relay_cli(expected_role: RelayRole, bin_name: &str, args: &[Str
 
     if parsed.show_help {
         println!(
-            "Usage: {bin_name} --config <FILE> [--log-level error|warn|info|debug] [--check-only]"
+            "Usage: {bin_name} --config <FILE> [--listen <IP:PORT>] [--log-level error|warn|info|debug] [--check-only]"
         );
         return ExitCode::SUCCESS;
     }
@@ -208,13 +249,21 @@ pub async fn run_relay_cli(expected_role: RelayRole, bin_name: &str, args: &[Str
         }
     };
 
-    let cfg = match RelayConfig::from_toml_str(&raw_toml) {
+    let mut cfg = match RelayConfig::from_toml_str(&raw_toml) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("error: invalid relay configuration: {e}");
             return ExitCode::FAILURE;
         }
     };
+
+    if let Some(listen) = parsed.listen_override {
+        cfg.listen_addr = listen;
+        if let Err(e) = cfg.validate() {
+            eprintln!("error: invalid --listen override: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
 
     if cfg.role != expected_role {
         eprintln!(
@@ -254,9 +303,7 @@ pub async fn run_relay_cli(expected_role: RelayRole, bin_name: &str, args: &[Str
         handle.local_addr()
     );
 
-    if tokio::signal::ctrl_c().await.is_err() {
-        eprintln!("warning: Ctrl+C signal listener failed; initiating shutdown");
-    }
+    wait_for_shutdown_signal().await;
 
     println!("STATUS=SHUTTING_DOWN id={}", cfg.id);
     handle.shutdown().await;
@@ -276,6 +323,7 @@ pub enum ClientRequestSpec {
 pub struct ClientCliArgs {
     pub config_path: PathBuf,
     pub request: Option<ClientRequestSpec>,
+    pub probe_addr: Option<String>,
     pub log_level: Option<LogLevel>,
     pub check_only: bool,
     pub print_body: bool,
@@ -289,6 +337,7 @@ pub fn parse_client_args(args: &[String]) -> Result<ClientCliArgs, String> {
     let mut target: Option<String> = None;
     let mut data: Option<String> = None;
     let mut data_bytes: Option<usize> = None;
+    let mut probe_addr: Option<String> = None;
     let mut log_level: Option<LogLevel> = None;
     let mut check_only = false;
     let mut print_body = false;
@@ -300,11 +349,19 @@ pub fn parse_client_args(args: &[String]) -> Result<ClientCliArgs, String> {
                 return Ok(ClientCliArgs {
                     config_path: PathBuf::new(),
                     request: None,
+                    probe_addr: None,
                     log_level,
                     check_only,
                     print_body,
                     show_help: true,
                 });
+            }
+            "--probe" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or_else(|| "relay-client: --probe requires host:port".to_owned())?;
+                probe_addr = Some(val.clone());
             }
             "--config" => {
                 i += 1;
@@ -360,6 +417,24 @@ pub fn parse_client_args(args: &[String]) -> Result<ClientCliArgs, String> {
         i += 1;
     }
 
+    if let Some(probe) = probe_addr {
+        if config_path.is_some() || url.is_some() || target.is_some() || check_only {
+            return Err(
+                "relay-client: --probe cannot be combined with --config, --url, --target, or --check-only"
+                    .to_owned(),
+            );
+        }
+        return Ok(ClientCliArgs {
+            config_path: PathBuf::new(),
+            request: None,
+            probe_addr: Some(probe),
+            log_level,
+            check_only: false,
+            print_body: false,
+            show_help: false,
+        });
+    }
+
     let config_path = config_path.ok_or_else(|| {
         "relay-client: missing required --config <path> (run with --help for usage)".to_owned()
     })?;
@@ -406,6 +481,7 @@ pub fn parse_client_args(args: &[String]) -> Result<ClientCliArgs, String> {
     Ok(ClientCliArgs {
         config_path,
         request,
+        probe_addr: None,
         log_level,
         check_only,
         print_body,
@@ -511,9 +587,21 @@ pub async fn run_client_cli(args: &[String]) -> ExitCode {
 
     if parsed.show_help {
         println!(
-            "Usage: relay-client --config <FILE> (--url <http://host:port/path> | --target <host:port> [--data <STR> | --data-bytes <N>]) [--print-body] [--check-only] [--log-level error|warn|info|debug]"
+            "Usage: relay-client (--probe <HOST:PORT> | --config <FILE> (--url <http://host:port/path> | --target <host:port> [--data <STR> | --data-bytes <N>])) [--print-body] [--check-only] [--log-level error|warn|info|debug]"
         );
         return ExitCode::SUCCESS;
+    }
+
+    if let Some(probe_addr) = parsed.probe_addr {
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::net::TcpStream::connect(&probe_addr),
+        )
+        .await
+        {
+            Ok(Ok(_)) => return ExitCode::SUCCESS,
+            _ => return ExitCode::FAILURE,
+        }
     }
 
     init_cli_logger(parsed.log_level);
@@ -801,7 +889,7 @@ pub async fn run_demo_dest(args: &[String]) -> ExitCode {
         }
     });
 
-    let _ = tokio::signal::ctrl_c().await;
+    wait_for_shutdown_signal().await;
     println!("STATUS=SHUTTING_DOWN service=demo-dest");
     let _ = sd_tx.send(true);
     let _ = accept_task.await;
@@ -906,15 +994,21 @@ pub fn run_keygen(args: &[String]) -> ExitCode {
     let mut entry_addr = "127.0.0.1:9101".to_owned();
     let mut middle_addr = "127.0.0.1:9102".to_owned();
     let mut exit_addr = "127.0.0.1:9103".to_owned();
+    let mut entry_listen: Option<String> = None;
+    let mut middle_listen: Option<String> = None;
+    let mut exit_listen: Option<String> = None;
     let mut allowed_targets: Vec<String> = Vec::new();
     let mut destination_io_timeout_ms = 5_000u64;
+    let mut allow_loopback_for_test = true;
+    let mut allow_private_targets_for_test = false;
+    let mut split_dirs = false;
     let mut i = 0;
 
     while i < args.len() {
         match args[i].as_str() {
             "-h" | "--help" => {
                 println!(
-                    "Usage: relay-keygen [--out-dir <DIR>] [--entry-addr <IP:PORT>] [--middle-addr <IP:PORT>] [--exit-addr <IP:PORT>] [--allow-target <HOST:PORT>] [--dest-timeout-ms <MS>]"
+                    "Usage: relay-keygen [--out-dir <DIR>] [--entry-addr <HOST:PORT>] [--middle-addr <HOST:PORT>] [--exit-addr <HOST:PORT>] [--entry-listen <IP:PORT>] [--middle-listen <IP:PORT>] [--exit-listen <IP:PORT>] [--allow-target <HOST:PORT>] [--dest-timeout-ms <MS>] [--allow-private-targets-for-test] [--deny-loopback] [--split-dirs]"
                 );
                 return ExitCode::SUCCESS;
             }
@@ -929,7 +1023,7 @@ pub fn run_keygen(args: &[String]) -> ExitCode {
             "--entry-addr" => {
                 i += 1;
                 let Some(v) = args.get(i) else {
-                    eprintln!("error: relay-keygen: --entry-addr requires ip:port");
+                    eprintln!("error: relay-keygen: --entry-addr requires host:port");
                     return ExitCode::FAILURE;
                 };
                 entry_addr = v.clone();
@@ -937,7 +1031,7 @@ pub fn run_keygen(args: &[String]) -> ExitCode {
             "--middle-addr" => {
                 i += 1;
                 let Some(v) = args.get(i) else {
-                    eprintln!("error: relay-keygen: --middle-addr requires ip:port");
+                    eprintln!("error: relay-keygen: --middle-addr requires host:port");
                     return ExitCode::FAILURE;
                 };
                 middle_addr = v.clone();
@@ -945,10 +1039,34 @@ pub fn run_keygen(args: &[String]) -> ExitCode {
             "--exit-addr" => {
                 i += 1;
                 let Some(v) = args.get(i) else {
-                    eprintln!("error: relay-keygen: --exit-addr requires ip:port");
+                    eprintln!("error: relay-keygen: --exit-addr requires host:port");
                     return ExitCode::FAILURE;
                 };
                 exit_addr = v.clone();
+            }
+            "--entry-listen" => {
+                i += 1;
+                let Some(v) = args.get(i) else {
+                    eprintln!("error: relay-keygen: --entry-listen requires ip:port");
+                    return ExitCode::FAILURE;
+                };
+                entry_listen = Some(v.clone());
+            }
+            "--middle-listen" => {
+                i += 1;
+                let Some(v) = args.get(i) else {
+                    eprintln!("error: relay-keygen: --middle-listen requires ip:port");
+                    return ExitCode::FAILURE;
+                };
+                middle_listen = Some(v.clone());
+            }
+            "--exit-listen" => {
+                i += 1;
+                let Some(v) = args.get(i) else {
+                    eprintln!("error: relay-keygen: --exit-listen requires ip:port");
+                    return ExitCode::FAILURE;
+                };
+                exit_listen = Some(v.clone());
             }
             "--allow-target" => {
                 i += 1;
@@ -958,6 +1076,9 @@ pub fn run_keygen(args: &[String]) -> ExitCode {
                 };
                 allowed_targets.push(v.clone());
             }
+            "--allow-private-targets-for-test" => allow_private_targets_for_test = true,
+            "--deny-loopback" => allow_loopback_for_test = false,
+            "--split-dirs" => split_dirs = true,
             "--dest-timeout-ms" => {
                 i += 1;
                 let Some(v) = args.get(i) else {
@@ -984,13 +1105,23 @@ pub fn run_keygen(args: &[String]) -> ExitCode {
         allowed_targets.push("127.0.0.1:9000".to_owned());
     }
 
-    match generate_demo_configs(
+    let opts = KeygenOptions {
+        entry_listen: entry_listen.unwrap_or_else(|| entry_addr.clone()),
+        middle_listen: middle_listen.unwrap_or_else(|| middle_addr.clone()),
+        exit_listen: exit_listen.unwrap_or_else(|| exit_addr.clone()),
+        allow_loopback_for_test,
+        allow_private_targets_for_test,
+        split_dirs,
+    };
+
+    match generate_demo_configs_with_options(
         &out_dir,
         &entry_addr,
         &middle_addr,
         &exit_addr,
         allowed_targets,
         destination_io_timeout_ms,
+        &opts,
     ) {
         Ok(()) => {
             println!("KEYGEN_OK out_dir={}", out_dir.display());
@@ -1003,6 +1134,17 @@ pub fn run_keygen(args: &[String]) -> ExitCode {
     }
 }
 
+/// Optional container/isolation layout flags for [`generate_demo_configs_with_options`].
+#[derive(Debug, Clone)]
+pub struct KeygenOptions {
+    pub entry_listen: String,
+    pub middle_listen: String,
+    pub exit_listen: String,
+    pub allow_loopback_for_test: bool,
+    pub allow_private_targets_for_test: bool,
+    pub split_dirs: bool,
+}
+
 /// Generates fresh X25519 demo identities and validated TOML configurations inside `out_dir`.
 pub fn generate_demo_configs(
     out_dir: &Path,
@@ -1011,6 +1153,35 @@ pub fn generate_demo_configs(
     exit_addr: &str,
     allowed_targets: Vec<String>,
     destination_io_timeout_ms: u64,
+) -> Result<(), String> {
+    let opts = KeygenOptions {
+        entry_listen: entry_addr.to_owned(),
+        middle_listen: middle_addr.to_owned(),
+        exit_listen: exit_addr.to_owned(),
+        allow_loopback_for_test: true,
+        allow_private_targets_for_test: false,
+        split_dirs: false,
+    };
+    generate_demo_configs_with_options(
+        out_dir,
+        entry_addr,
+        middle_addr,
+        exit_addr,
+        allowed_targets,
+        destination_io_timeout_ms,
+        &opts,
+    )
+}
+
+/// Generates fresh X25519 demo identities supporting distinct bind addresses and split per-node directories.
+pub fn generate_demo_configs_with_options(
+    out_dir: &Path,
+    entry_addr: &str,
+    middle_addr: &str,
+    exit_addr: &str,
+    allowed_targets: Vec<String>,
+    destination_io_timeout_ms: u64,
+    opts: &KeygenOptions,
 ) -> Result<(), String> {
     let entry_kp = StaticKeypair::generate().map_err(|e| e.to_string())?;
     let middle_kp = StaticKeypair::generate().map_err(|e| e.to_string())?;
@@ -1035,9 +1206,14 @@ pub fn generate_demo_configs(
         public_key_hex: encode_hex(entry_kp.public()),
     };
 
-    let mut exit_cfg =
-        RelayConfig::with_generated_keypair("demo-exit-1", RelayRole::Exit, exit_addr, &exit_kp);
-    exit_cfg.allow_loopback_for_test = true;
+    let mut exit_cfg = RelayConfig::with_generated_keypair(
+        "demo-exit-1",
+        RelayRole::Exit,
+        &opts.exit_listen,
+        &exit_kp,
+    );
+    exit_cfg.allow_loopback_for_test = opts.allow_loopback_for_test;
+    exit_cfg.allow_private_targets_for_test = opts.allow_private_targets_for_test;
     exit_cfg.allowed_targets = allowed_targets;
     exit_cfg.destination_io_timeout_ms = destination_io_timeout_ms;
     exit_cfg.validate().map_err(|e| e.to_string())?;
@@ -1045,7 +1221,7 @@ pub fn generate_demo_configs(
     let mut middle_cfg = RelayConfig::with_generated_keypair(
         "demo-middle-1",
         RelayRole::Middle,
-        middle_addr,
+        &opts.middle_listen,
         &middle_kp,
     );
     middle_cfg.allowed_next_peers = vec![exit_desc.clone()];
@@ -1054,7 +1230,7 @@ pub fn generate_demo_configs(
     let mut entry_cfg = RelayConfig::with_generated_keypair(
         "demo-entry-1",
         RelayRole::Entry,
-        entry_addr,
+        &opts.entry_listen,
         &entry_kp,
     );
     entry_cfg.allowed_next_peers = vec![middle_desc.clone()];
@@ -1072,27 +1248,53 @@ pub fn generate_demo_configs(
     };
     client_cfg.validate().map_err(|e| e.to_string())?;
 
-    fs::create_dir_all(out_dir).map_err(|e| format!("create_dir_all: {e}"))?;
-    fs::write(
-        out_dir.join("entry.toml"),
-        entry_cfg.to_toml_string().map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("write entry.toml: {e}"))?;
-    fs::write(
-        out_dir.join("middle.toml"),
-        middle_cfg.to_toml_string().map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("write middle.toml: {e}"))?;
-    fs::write(
-        out_dir.join("exit.toml"),
-        exit_cfg.to_toml_string().map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("write exit.toml: {e}"))?;
-    fs::write(
-        out_dir.join("client.toml"),
-        client_cfg.to_toml_string().map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("write client.toml: {e}"))?;
+    let (entry_dir, middle_dir, exit_dir, client_dir) = if opts.split_dirs {
+        (
+            out_dir.join("entry"),
+            out_dir.join("middle"),
+            out_dir.join("exit"),
+            out_dir.join("client"),
+        )
+    } else {
+        (
+            out_dir.to_path_buf(),
+            out_dir.to_path_buf(),
+            out_dir.to_path_buf(),
+            out_dir.to_path_buf(),
+        )
+    };
 
+    for dir in [&entry_dir, &middle_dir, &exit_dir, &client_dir] {
+        fs::create_dir_all(dir).map_err(|e| format!("create_dir_all: {e}"))?;
+    }
+
+    write_config_file(
+        &entry_dir.join("entry.toml"),
+        &entry_cfg.to_toml_string().map_err(|e| e.to_string())?,
+    )?;
+    write_config_file(
+        &middle_dir.join("middle.toml"),
+        &middle_cfg.to_toml_string().map_err(|e| e.to_string())?,
+    )?;
+    write_config_file(
+        &exit_dir.join("exit.toml"),
+        &exit_cfg.to_toml_string().map_err(|e| e.to_string())?,
+    )?;
+    write_config_file(
+        &client_dir.join("client.toml"),
+        &client_cfg.to_toml_string().map_err(|e| e.to_string())?,
+    )?;
+
+    Ok(())
+}
+
+fn write_config_file(path: &Path, content: &str) -> Result<(), String> {
+    fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o600);
+        let _ = fs::set_permissions(path, perms);
+    }
     Ok(())
 }

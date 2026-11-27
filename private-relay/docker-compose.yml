@@ -1,0 +1,220 @@
+name: private-relay
+
+networks:
+  relay_net:
+    driver: bridge
+    internal: true
+
+volumes:
+  entry_cfg:
+  middle_cfg:
+  exit_cfg:
+  client_cfg:
+
+services:
+  # Ephemeral init generator: produces fresh X25519 keys into isolated per-node runtime volumes.
+  # Zero private keys are baked into the Docker image or committed to Git.
+  relay-keygen:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: private-relay:v0.1
+    container_name: private-relay-keygen
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    networks:
+      - relay_net
+    volumes:
+      - entry_cfg:/cfg/entry
+      - middle_cfg:/cfg/middle
+      - exit_cfg:/cfg/exit
+      - client_cfg:/cfg/client
+    entrypoint: ["/usr/local/bin/relay-keygen"]
+    command:
+      - "--out-dir"
+      - "/cfg"
+      - "--split-dirs"
+      - "--entry-addr"
+      - "relay-entry:9101"
+      - "--middle-addr"
+      - "relay-middle:9102"
+      - "--exit-addr"
+      - "relay-exit:9103"
+      - "--entry-listen"
+      - "0.0.0.0:9101"
+      - "--middle-listen"
+      - "0.0.0.0:9102"
+      - "--exit-listen"
+      - "0.0.0.0:9103"
+      - "--allow-target"
+      - "demo-dest:9000"
+      - "--allow-private-targets-for-test"
+      - "--deny-loopback"
+      - "--dest-timeout-ms"
+      - "2500"
+    mem_limit: 64m
+    cpus: 0.50
+    pids_limit: 32
+
+  demo-dest:
+    image: private-relay:v0.1
+    container_name: private-relay-dest
+    depends_on:
+      relay-keygen:
+        condition: service_completed_successfully
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    networks:
+      - relay_net
+    entrypoint: ["/usr/local/bin/demo-dest"]
+    command: ["--config", "/app/destination.toml"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/relay-client", "--probe", "127.0.0.1:9000"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 1s
+    mem_limit: 64m
+    cpus: 0.50
+    pids_limit: 64
+
+  relay-exit:
+    image: private-relay:v0.1
+    container_name: private-relay-exit
+    depends_on:
+      relay-keygen:
+        condition: service_completed_successfully
+      demo-dest:
+        condition: service_healthy
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    networks:
+      - relay_net
+    volumes:
+      - exit_cfg:/cfg:ro
+    entrypoint: ["/usr/local/bin/relay-exit"]
+    command: ["--config", "/cfg/exit.toml", "--log-level", "debug"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/relay-client", "--probe", "127.0.0.1:9103"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 1s
+    mem_limit: 128m
+    cpus: 0.50
+    pids_limit: 64
+
+  relay-middle:
+    image: private-relay:v0.1
+    container_name: private-relay-middle
+    depends_on:
+      relay-keygen:
+        condition: service_completed_successfully
+      relay-exit:
+        condition: service_healthy
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    networks:
+      - relay_net
+    volumes:
+      - middle_cfg:/cfg:ro
+    entrypoint: ["/usr/local/bin/relay-middle"]
+    command: ["--config", "/cfg/middle.toml", "--log-level", "debug"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/relay-client", "--probe", "127.0.0.1:9102"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 1s
+    mem_limit: 128m
+    cpus: 0.50
+    pids_limit: 64
+
+  relay-entry:
+    image: private-relay:v0.1
+    container_name: private-relay-entry
+    depends_on:
+      relay-keygen:
+        condition: service_completed_successfully
+      relay-middle:
+        condition: service_healthy
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    networks:
+      - relay_net
+    volumes:
+      - entry_cfg:/cfg:ro
+    entrypoint: ["/usr/local/bin/relay-entry"]
+    command: ["--config", "/cfg/entry.toml", "--log-level", "debug"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/relay-client", "--probe", "127.0.0.1:9101"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 1s
+    mem_limit: 128m
+    cpus: 0.50
+    pids_limit: 64
+
+  relay-client:
+    image: private-relay:v0.1
+    container_name: private-relay-client
+    profiles: ["client"]
+    depends_on:
+      demo-dest:
+        condition: service_healthy
+      relay-exit:
+        condition: service_healthy
+      relay-middle:
+        condition: service_healthy
+      relay-entry:
+        condition: service_healthy
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    networks:
+      - relay_net
+    volumes:
+      - client_cfg:/cfg:ro
+    entrypoint: ["/usr/local/bin/relay-client"]
+    command: ["--config", "/cfg/client.toml", "--url", "http://demo-dest:9000/health"]
+    mem_limit: 64m
+    cpus: 0.50
+    pids_limit: 64

@@ -404,6 +404,7 @@ impl RelayServer {
 
         let dest_policy = DestinationPolicy {
             allow_loopback_for_test: effective_config.allow_loopback_for_test,
+            allow_private_targets_for_test: effective_config.allow_private_targets_for_test,
             allowed_targets: effective_config.allowed_targets.clone(),
         };
 

@@ -1,6 +1,6 @@
 # Security Design — Private-Relay Protocol (`v0.1`)
 
-> **Status:** Implemented Prototype (`Day 3 — v0.1`). Standard cryptographic crates compiled and locally unit/E2E/multi-process tested (`40/40` workspace tests passing + 10-case Windows demo verified); independent external cryptographic audit has NOT been performed.  
+> **Status:** Implemented Prototype (`Day 5 — v0.1`). Standard cryptographic crates compiled and verified across local bare-metal (`40/40` workspace tests) and hardened 5-container Docker Compose E2E (`12/12` scenarios); independent external cryptographic audit has NOT been performed.  
 > **Rule:** Never invent cryptographic algorithms, never log secret key material or PII, and never treat unit tests as equivalent to independent cryptographic review.
 
 ---
@@ -59,7 +59,9 @@ For each hop `i`:
    - Client serializes target hostname as a UTF-8 string inside Exit-encrypted `InnerPayload::Begin`—never resolving DNS on the client.
     - Exit resolves DNS strictly over configured safe resolvers inside `timeout(dest_timeout, ...)` (`SEC-201`), checks **every** returned `IpAddr` before `TcpStream::connect(validated_addr)`, and denies private/reserved ranges:
       - **IPv4 Denied:** `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `224.0.0.0/4`, `240.0.0.0/4`.
-      - **IPv6 Denied (Default):** `::/128`, `::1/128`, `64:ff9b::/96` (NAT64), `fe80::/10` (link-local), `fc00::/7` (ULA), `ff00::/8` (multicast), `2001:db8::/32`, IPv4-mapped `::ffff:0:0/96` wrapping any private/reserved IPv4 above. *(Loopback override strictly gated behind test-only flag `allow_loopback_for_test = false`.)*
+      - **IPv6 Denied (Default):** `::/128`, `::1/128`, `::/96` IPv4-compatible, `::ffff:0:0/96` IPv4-mapped, `::ffff:0:0:0/96` SIIT, `0100::/64`, `64:ff9b::/96` (NAT64), `fe80::/10` (link-local), `fec0::/10` (site-local), `fc00::/7` (ULA), `ff00::/8` (multicast), `2001::/32` (Teredo), `2001:2::/48`, `2001:db8::/32`, `2002::/16` (6to4), plus `%` zone IDs (`D4-01`). *(Test overrides: `allow_loopback_for_test = false`, and `allow_private_targets_for_test = false` strictly gated on non-empty `allowed_targets` for isolated Docker Compose testing — NEVER loosens loopback or `169.254.0.0/16` metadata blocking.)*
+4. **Container Isolation Boundaries (`Day 5` Dev Compose vs. Production):**
+   - Runtime containers (`debian:bookworm-slim`) drop all Linux capabilities (`cap_drop: [ALL]`), enforce `no-new-privileges:true`, `read_only: true`, non-root `UID/GID 10001`, memory/CPU/PID caps, zero embedded keys inside images, and isolated per-node `:ro` secret volumes generated at startup by `relay-keygen` over an `internal: true` Compose bridge network. Production deployments MUST replace ephemeral init-volume keygen with external KMS/Vault/HSM injection and remove dev target overrides (`allow_private_targets_for_test = false`, `allow_loopback_for_test = false`).
 
 ---
 

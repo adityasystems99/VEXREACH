@@ -108,6 +108,7 @@ async fn ssrf_policy_blocks_private_and_loopback_by_default() {
     // Loopback test override never loosens metadata/private transition addresses.
     let loopback_policy = DestinationPolicy {
         allow_loopback_for_test: true,
+        allow_private_targets_for_test: false,
         allowed_targets: Vec::new(),
     };
     assert!(loopback_policy
@@ -117,9 +118,39 @@ async fn ssrf_policy_blocks_private_and_loopback_by_default() {
         .validate_ip(IpAddr::V6("2002:a9fe:a9fe::".parse().unwrap()))
         .is_err());
 
+    // Private-target test override strictly requires explicit allowed_targets and STILL denies loopback/metadata.
+    let private_empty_allowlist = DestinationPolicy {
+        allow_loopback_for_test: false,
+        allow_private_targets_for_test: true,
+        allowed_targets: Vec::new(),
+    };
+    assert!(private_empty_allowlist
+        .validate_ip(IpAddr::V4(Ipv4Addr::new(172, 18, 0, 2)))
+        .is_err());
+
+    let container_policy = DestinationPolicy {
+        allow_loopback_for_test: false,
+        allow_private_targets_for_test: true,
+        allowed_targets: vec!["demo-dest:9000".into()],
+    };
+    assert!(container_policy
+        .validate_ip(IpAddr::V4(Ipv4Addr::new(172, 18, 0, 2)))
+        .is_ok());
+    assert!(container_policy
+        .validate_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)))
+        .is_err());
+    assert!(container_policy
+        .validate_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))
+        .is_err());
+    assert!(matches!(
+        container_policy.resolve_and_validate("10.0.0.1:80").await,
+        Err(NetworkError::PolicyDenied(_))
+    ));
+
     // Explicit test loopback flag + allowlist works only for listed targets.
     let test_policy = DestinationPolicy {
         allow_loopback_for_test: true,
+        allow_private_targets_for_test: false,
         allowed_targets: vec!["127.0.0.1:8080".into()],
     };
     assert!(test_policy
@@ -468,6 +499,16 @@ fn config_rejects_invalid_roles_mismatched_keys_loop_and_bounds() {
         bad_bounds_cfg.validate(),
         Err(NetworkError::Config(_))
     ));
+
+    let mut bad_priv_cfg =
+        RelayConfig::with_generated_keypair("x2", RelayRole::Exit, "0.0.0.0:9103", &kp_exit);
+    bad_priv_cfg.allow_private_targets_for_test = true;
+    assert!(matches!(
+        bad_priv_cfg.validate(),
+        Err(NetworkError::Config(_))
+    ));
+    bad_priv_cfg.allowed_targets = vec!["demo-dest:9000".into()];
+    assert!(bad_priv_cfg.validate().is_ok());
 
     // 6. ClientConfigFile rejects role mismatch or duplicate hop keys.
     let mut ccfg = ClientConfigFile {

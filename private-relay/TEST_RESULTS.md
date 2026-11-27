@@ -103,6 +103,7 @@
 - Executed scenarios `1..10`: empty `0B` (`113ms`), `/health` (`95ms`, `HTTP/1.1 200 OK`, `142B`), `/medium` (`187ms`, `12375B`), exact `65536B` raw (`620ms`, `65536B`), `/max-64kib` (`394ms`, `65536B`), `/redirect-ssrf` (`99ms`, `302 Found` unfollowed), `65537B` (`REJECTED_LOCALLY`, `88ms`), unlisted target `127.0.0.1:9099` (`PolicyDenied`, `91ms`), `/oversized` (`PayloadTooLarge`, `97ms`), and `/slow` (`Timeout`, `2610ms`).
 - Multi-process log verification in `demo/logs/`: `relay-entry`, `relay-middle`, and `relay-exit` each recorded `STATUS=READY` and `circuit_hops=10` without logging IP addresses, target paths, payloads, or key hex values.
 - Full Day 4 independent engineering audit results (`D4-01` IPv6 SSRF fix, `D4-02` sliding replay/deadline fix, offline `cargo tree` license/`0`-`unsafe` check, & fresh demo/test reproduction) are recorded in [DAY4_VERIFICATION_REPORT.md](./DAY4_VERIFICATION_REPORT.md).
+- Full Day 5 containerized Docker Compose execution (`docker compose build` -> `private-relay:v0.1`, all 4 healthy daemon containers + `private-relay-keygen`, 12/12 E2E container scenarios including RFC1918/loopback/metadata SSRF denials, `circuit_hops=12` log proof, & clean `SIGTERM` teardown) is recorded in [docs/DAY_5_DOCKER_REPORT.md](./docs/DAY_5_DOCKER_REPORT.md).
 
 ---
 
@@ -110,5 +111,5 @@
 
 | Suite | Target Phase | Status | Notes |
 | :--- | :--- | :--- | :--- |
-| Multi-host WAN soak benchmarks, Docker containers & K8s/Prometheus | Phase 6–8 | **Not Yet Executed / Deferred** | `dockerDesktopLinuxEngine` offline on host (`DEFERRED`); Kubernetes, Prometheus, and LLM integration excluded from Day 3 scope |
+| Multi-host WAN soak benchmarks, Kubernetes & Prometheus | Phase 6–8 | **Not Yet Executed / Deferred** | Local Docker Compose verified (`Day 5`); Kubernetes, Prometheus, and LLM integration remain out of scope |
 | Fuzzing (`cargo-fuzz`), `cargo-audit` & third-party security audit | Pre-Production | **Not Yet Executed** | `cargo-audit`/`cargo-deny` absent offline; required before any non-research deployment |

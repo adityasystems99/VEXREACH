@@ -15,7 +15,8 @@
 | Coordinator registry, operator diversity & failover | Proposed / Deferred | **Deferred** | Phase 5 |
 | Privacy-preserving Prometheus aggregate metrics & K8s | Proposed / Deferred | **Deferred (Excluded from Day 3)** | Phase 6 |
 | Adversarial crypto, SSRF & DoS test harness | Proposed / Deferred | **Deferred (`cargo-fuzz`/`cargo-audit` not run)** | Phase 7 |
-| Multi-host Docker / TLS deployment | Proposed / Deferred | **Deferred (Docker daemon offline locally)** | Phase 8 |
+| Local Docker Compose 5-container deployment (`v0.1`) | Implemented Prototype (`Day 5`) | **Implemented & Tested (`12/12` container E2E + `private-relay:v0.1`)** | Day 5 (`Complete`) |
+| Multi-host cloud / TLS deployment | Proposed / Deferred | **Deferred (Multi-host WAN/KMS not started)** | Phase 8 |
 | Live backend-connected frontend / LLM operational assistant | Proposed / Deferred | **Deferred (Excluded from Day 3)** | Phase 9 |
 | Sphinx constant-length `N`-hop headers / Cover traffic | Research Extension | **Experimental / Out of Scope for v0.1** | Beyond v0.1 |
 

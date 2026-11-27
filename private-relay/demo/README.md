@@ -123,7 +123,31 @@ Press `Ctrl+C` in Terminals 4 → 3 → 2 → 1 (each relay triggers `handle.shu
 
 ---
 
-## 4. Troubleshooting
+## 4. Docker Containerized 5-Node Execution (Dev / Local Compose)
+
+An isolated internal Docker bridge stack (`relay_net`, `internal: true`) runs each component in its own hardened non-root (`UID 10001`), read-only container (`private-relay-keygen` → `private-relay-dest` → `private-relay-exit` → `private-relay-middle` → `private-relay-entry`, plus one-shot `private-relay-client` via `--profile client`).
+
+> **Local Container vs. Production Notice:** The Compose setup uses `relay-keygen` to populate ephemeral keys into isolated per-node Docker volumes (`entry_cfg`, `middle_cfg`, `exit_cfg`, `client_cfg`) and sets `allow_private_targets_for_test = true` (`allow_loopback_for_test = false`) pinned strictly to `allowed_targets = ["demo-dest:9000"]` so `Exit` can dial `demo-dest` on the Docker bridge network while still rejecting loopback (`127.0.0.1`), metadata (`169.254.169.254`), and unlisted private RFC1918 targets (`10.0.0.1`). **Never reuse local Compose keys or `allow_private_targets_for_test` in production; production requires external secret injection (Vault/KMS/CSI secrets), signed Coordinator manifests, and host/cluster firewalling.**
+
+```powershell
+cd private-relay
+
+# 1. Automated full build + health checks + 12 container E2E scenarios + clean teardown:
+.\demo\run-docker-demo.ps1
+
+# Or step-by-step manual Compose commands:
+docker compose config --quiet
+docker compose build
+docker compose up -d --wait demo-dest relay-exit relay-middle relay-entry
+docker compose ps -a
+docker compose run --rm --no-deps relay-client --config /cfg/client.toml --url http://demo-dest:9000/health
+docker compose logs --no-color relay-entry relay-middle relay-exit
+docker compose down -v --remove-orphans
+```
+
+---
+
+## 5. Troubleshooting
 
 - **`connection: FAILED` or refused on `:9101/:9102/:9103`:** Confirm terminals were started in dependency order (`demo-dest` → `exit` → `middle` → `entry`) and no firewall/antivirus or old demo PID holds those ports (`.\demo\stop-demo.ps1`).
 - **`REMOTE_ERROR(PolicyDenied)` on loopback targets:** Confirm `exit.toml` has both `allow_loopback_for_test = true` AND the exact `host:port` inside `allowed_targets`.

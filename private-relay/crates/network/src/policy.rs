@@ -9,6 +9,9 @@ use crate::error::NetworkError;
 #[derive(Debug, Clone, Default)]
 pub struct DestinationPolicy {
     pub allow_loopback_for_test: bool,
+    /// Strictly opt-in allowance for isolated local Docker bridge RFC1918 container networks.
+    /// Requires non-empty explicit `allowed_targets`; NEVER permits loopback or `169.254.0.0/16` metadata IPs.
+    pub allow_private_targets_for_test: bool,
     pub allowed_targets: Vec<String>,
 }
 
@@ -70,9 +73,12 @@ impl DestinationPolicy {
         let is_this_network = octets[0] == 0;
         let is_benchmark = octets[0] == 198 && (octets[1] == 18 || octets[1] == 19);
         let is_ietf_prot = octets[0] == 192 && octets[1] == 0 && octets[2] == 0;
+        let private_permitted = ip.is_private()
+            && self.allow_private_targets_for_test
+            && !self.allowed_targets.is_empty();
         if is_this_network
             || ip.is_unspecified()
-            || ip.is_private()
+            || (ip.is_private() && !private_permitted)
             || ip.is_link_local()
             || ip.is_multicast()
             || ip.is_broadcast()
@@ -116,6 +122,9 @@ impl DestinationPolicy {
         let is_doc = segments[0] == 0x2001 && segments[1] == 0x0db8;
         let is_6to4 = segments[0] == 0x2002;
         let is_unique_local = (segments[0] & 0xfe00) == 0xfc00;
+        let ula_permitted = is_unique_local
+            && self.allow_private_targets_for_test
+            && !self.allowed_targets.is_empty();
         let is_link_local = (segments[0] & 0xffc0) == 0xfe80;
         let is_site_local = (segments[0] & 0xffc0) == 0xfec0;
         let is_ipv4_translated =
@@ -129,7 +138,7 @@ impl DestinationPolicy {
             || is_benchmark_v6
             || is_doc
             || is_6to4
-            || is_unique_local
+            || (is_unique_local && !ula_permitted)
             || is_link_local
             || is_site_local
             || is_ipv4_translated
