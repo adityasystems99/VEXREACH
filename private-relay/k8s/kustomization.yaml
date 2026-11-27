@@ -15,3 +15,5 @@ resources:
   - entry-service.yaml
   - client-job.yaml
   - network-policy.yaml
+  - observability-prometheus.yaml
+  - observability-grafana.yaml

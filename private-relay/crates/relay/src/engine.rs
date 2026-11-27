@@ -7,7 +7,8 @@ use std::time::Duration;
 use private_relay_crypto::{HopCipherPair, HopHandshakeResponder, StaticKeypair};
 use private_relay_network::{
     accept_noise_link_with_rekey, connect_noise_link_with_rekey, DestinationPolicy, LinkReader,
-    LinkWriter, NetworkError, PeerDescriptor, RelayConfig, RelayRole,
+    LinkWriter, NetworkError, PeerDescriptor, RelayConfig, RelayMetrics, RelayRole,
+    SharedRelayMetrics,
 };
 use private_relay_protocol::{
     chunk_response, encode_error_payload, Cell, CircuitId, CircuitState, Command, DecodedRequest,
@@ -43,6 +44,7 @@ struct RelayRuntime {
     outbound_links: AsyncMutex<OutboundLinkMap>,
     dial_locks: Mutex<DialLockMap>,
     shutdown_rx: watch::Receiver<bool>,
+    metrics: SharedRelayMetrics,
 }
 
 /// RAII tracker ensuring `RelayHandle::shutdown()` waits cleanly for spawned tasks to exit.
@@ -116,6 +118,7 @@ impl RelayRuntime {
             None
         };
 
+        self.metrics.inc_circuits_created();
         Some(CircuitSlotGuard {
             runtime: Arc::clone(self),
             tracked_ip,
@@ -221,6 +224,7 @@ impl Drop for CircuitSlotGuard {
                 }
             }
         }
+        self.runtime.metrics.inc_circuits_destroyed();
         self.runtime.active_circuits.fetch_sub(1, Ordering::AcqRel);
     }
 }
@@ -475,6 +479,10 @@ impl RelayHandle {
             .saturating_sub(self.runtime.conn_semaphore.available_permits())
     }
 
+    pub fn metrics(&self) -> &SharedRelayMetrics {
+        &self.runtime.metrics
+    }
+
     pub async fn shutdown(self) {
         let _ = self.shutdown_tx.send(true);
         let _ = self.accept_task.await;
@@ -524,6 +532,7 @@ impl RelayServer {
         };
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let metrics = Arc::new(RelayMetrics::new());
         let runtime = Arc::new(RelayRuntime {
             config: effective_config.clone(),
             keypair,
@@ -536,7 +545,44 @@ impl RelayServer {
             outbound_links: AsyncMutex::new(HashMap::new()),
             dial_locks: Mutex::new(HashMap::new()),
             shutdown_rx: shutdown_rx.clone(),
+            metrics: Arc::clone(&metrics),
         });
+
+        if let Some(metrics_addr) = effective_config.metrics_addr.as_deref() {
+            if let Ok(m_listener) = TcpListener::bind(metrics_addr).await {
+                let m_rt = Arc::clone(&runtime);
+                let mut m_sd = shutdown_rx.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            _ = m_sd.changed() => {
+                                if *m_sd.borrow() {
+                                    break;
+                                }
+                            }
+                            accepted = m_listener.accept() => {
+                                if let Ok((mut stream, _)) = accepted {
+                                    let mut buf = [0u8; 1024];
+                                    let _ = stream.read(&mut buf).await;
+                                    let role_str = match m_rt.config.role {
+                                        RelayRole::Entry => "entry",
+                                        RelayRole::Middle => "middle",
+                                        RelayRole::Exit => "exit",
+                                    };
+                                    let body = m_rt.metrics.render_prometheus(role_str, &m_rt.config.id);
+                                    let resp = format!(
+                                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                        body.len(),
+                                        body
+                                    );
+                                    let _ = stream.write_all(resp.as_bytes()).await;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
 
         info!(
             relay_id = %runtime.config.id,
@@ -559,6 +605,7 @@ impl RelayServer {
                             Ok((stream, peer_addr)) => {
                                 match Arc::clone(&rt_accept.conn_semaphore).try_acquire_owned() {
                                     Ok(permit) => {
+                                        rt_accept.metrics.inc_connections_accepted();
                                         let rt_conn = Arc::clone(&rt_accept);
                                         let conn_track = TaskTrackGuard::spawn_counted(&rt_conn);
                                         tokio::spawn(async move {
@@ -567,6 +614,7 @@ impl RelayServer {
                                         });
                                     }
                                     Err(_) => {
+                                        rt_accept.metrics.inc_connections_rejected();
                                         drop(stream);
                                         warn!(
                                             relay_id = %rt_accept.config.id,
@@ -617,6 +665,7 @@ async fn handle_inbound_connection(
     {
         Ok(tuple) => tuple,
         Err(_) => {
+            runtime.metrics.dec_connections_active();
             debug!(
                 relay_id = %runtime.config.id,
                 role = ?runtime.config.role,
@@ -626,7 +675,8 @@ async fn handle_inbound_connection(
         }
     };
 
-    spawn_inbound_link_loop(runtime, reader, writer, peer_ip).await;
+    spawn_inbound_link_loop(runtime.clone(), reader, writer, peer_ip).await;
+    runtime.metrics.dec_connections_active();
 }
 
 async fn spawn_inbound_link_loop(
@@ -671,6 +721,8 @@ async fn spawn_inbound_link_loop(
             recv_res = reader.recv_cell_with_timeouts(idle_ttl, io_timeout) => {
                 match recv_res {
                     Ok(cell) => {
+                        runtime.metrics.inc_cells_processed();
+                        runtime.metrics.add_bytes_received(600);
                         dispatch_inbound_cell(
                             &runtime,
                             peer_ip,
@@ -1333,6 +1385,18 @@ async fn run_exit_circuit_task(
                 res = resp_rx => {
                     active_dest_task = None;
                     let result = res.unwrap_or(Err(RequestErrorCode::InternalError));
+                    match &result {
+                        Ok(_) => runtime.metrics.inc_requests_success(),
+                        Err(code) => {
+                            runtime.metrics.inc_requests_failed();
+                            match code {
+                                RequestErrorCode::PolicyDenied => runtime.metrics.inc_ssrf_denied(),
+                                RequestErrorCode::Timeout => runtime.metrics.inc_timeouts(),
+                                RequestErrorCode::PayloadTooLarge => runtime.metrics.inc_payload_too_large(),
+                                _ => runtime.metrics.inc_protocol_violations(),
+                            }
+                        }
+                    }
                     if send_exit_response(&up_tx, cid, rid, &mut hop_ciphers, result, io_timeout)
                         .await
                         .is_err()
@@ -1478,13 +1542,21 @@ async fn run_exit_circuit_task(
                                                 };
                                                 let _ = tx.send(outcome);
                                             });
+                                            runtime.metrics.inc_requests();
                                             active_dest_task = Some((rid, rx));
                                         }
                                         Err(e) => {
                                             let code = match e {
-                                                private_relay_protocol::ProtocolError::PayloadTooLarge { .. } => RequestErrorCode::PayloadTooLarge,
-                                                _ => RequestErrorCode::ProtocolViolation,
+                                                private_relay_protocol::ProtocolError::PayloadTooLarge { .. } => {
+                                                    runtime.metrics.inc_payload_too_large();
+                                                    RequestErrorCode::PayloadTooLarge
+                                                }
+                                                _ => {
+                                                    runtime.metrics.inc_protocol_violations();
+                                                    RequestErrorCode::ProtocolViolation
+                                                }
                                             };
+                                            runtime.metrics.inc_requests_failed();
                                             if send_exit_response(&up_tx, cid, rid, &mut hop_ciphers, Err(code), io_timeout).await.is_err() {
                                                 destroy_reason = DestroyReason::PeerDisconnected;
                                                 notify_upstream_destroy = true;
@@ -1650,6 +1722,7 @@ mod tests {
             outbound_links: AsyncMutex::new(HashMap::new()),
             dial_locks: Mutex::new(HashMap::new()),
             shutdown_rx: sd_rx,
+            metrics: Arc::new(RelayMetrics::new()),
         });
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

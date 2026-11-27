@@ -88,6 +88,9 @@ pub struct RelayConfig {
     pub link_rekey_interval_secs: u64,
     #[serde(default = "default_link_rekey_bytes")]
     pub link_rekey_bytes: u64,
+    /// Optional HTTP metrics bind address (e.g. "0.0.0.0:9091") exposing /metrics for Prometheus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_addr: Option<String>,
 }
 
 const fn default_max_concurrent_connections() -> usize {
@@ -150,6 +153,7 @@ impl RelayConfig {
             idle_circuit_ttl_secs: default_idle_circuit_ttl_secs(),
             link_rekey_interval_secs: default_link_rekey_interval_secs(),
             link_rekey_bytes: default_link_rekey_bytes(),
+            metrics_addr: None,
         }
     }
 
@@ -359,6 +363,9 @@ pub struct ClientConfigFile {
     pub link_rekey_interval_secs: u64,
     #[serde(default = "default_link_rekey_bytes")]
     pub link_rekey_bytes: u64,
+    /// Optional HTTP metrics bind address (e.g. "0.0.0.0:9091") exposing /metrics for Prometheus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_addr: Option<String>,
 }
 
 const fn default_request_timeout_ms() -> u64 {

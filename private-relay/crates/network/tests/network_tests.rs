@@ -573,6 +573,7 @@ fn config_rejects_invalid_roles_mismatched_keys_loop_and_bounds() {
         request_timeout_ms: 10000,
         link_rekey_interval_secs: 3600,
         link_rekey_bytes: 1_073_741_824,
+        metrics_addr: None,
     };
     assert!(ccfg.validate().is_ok());
     ccfg.middle.role = RelayRole::Exit;

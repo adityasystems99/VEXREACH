@@ -1508,6 +1508,7 @@ pub fn generate_demo_configs_with_options(
         request_timeout_ms: destination_io_timeout_ms.saturating_add(5_000),
         link_rekey_interval_secs: 3_600,
         link_rekey_bytes: 1_073_741_824,
+        metrics_addr: None,
     };
     client_cfg.validate().map_err(|e| e.to_string())?;
 
