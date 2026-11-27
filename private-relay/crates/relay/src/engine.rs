@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1195,6 +1195,7 @@ async fn run_exit_circuit_task(
 
     let mut reassembler: Option<MessageReassembler> = None;
     let mut used_request_ids: HashSet<u32> = HashSet::new();
+    let mut used_request_order: VecDeque<u32> = VecDeque::new();
     let mut active_dest_task: Option<(private_relay_protocol::RequestId, PendingDestResponse)> =
         None;
     let destroy_reason;
@@ -1333,10 +1334,14 @@ async fn run_exit_circuit_task(
                                 Ok(None) => {}
                                 Ok(Some(ReassembledMessage::Data(raw_req))) => {
                                     reassembler = None;
-                                    if used_request_ids.len() >= 4096 {
-                                        used_request_ids.clear();
+                                    if used_request_order.len() >= 4096 {
+                                        if let Some(oldest) = used_request_order.pop_front() {
+                                            used_request_ids.remove(&oldest);
+                                        }
                                     }
-                                    used_request_ids.insert(rid.get());
+                                    if used_request_ids.insert(rid.get()) {
+                                        used_request_order.push_back(rid.get());
+                                    }
 
                                     match DecodedRequest::parse(&raw_req) {
                                         Ok(decoded_req) => {
@@ -1445,26 +1450,20 @@ async fn execute_destination_request(
 ) -> Result<Vec<u8>, private_relay_protocol::RequestErrorCode> {
     use private_relay_protocol::RequestErrorCode;
 
-    let validated_addr = match timeout(
-        dest_timeout,
-        policy.resolve_and_validate(&req.target_host_port),
-    )
-    .await
-    {
-        Ok(Ok(addr)) => addr,
-        Ok(Err(NetworkError::PolicyDenied(_))) => return Err(RequestErrorCode::PolicyDenied),
-        Ok(Err(NetworkError::DnsResolutionFailed)) => return Err(RequestErrorCode::DnsFailed),
-        Ok(Err(_)) => return Err(RequestErrorCode::InternalError),
-        Err(_) => return Err(RequestErrorCode::Timeout),
-    };
+    let exec_future = async {
+        let validated_addr = policy
+            .resolve_and_validate(&req.target_host_port)
+            .await
+            .map_err(|err| match err {
+                NetworkError::PolicyDenied(_) => RequestErrorCode::PolicyDenied,
+                NetworkError::DnsResolutionFailed => RequestErrorCode::DnsFailed,
+                _ => RequestErrorCode::InternalError,
+            })?;
 
-    let mut stream = match timeout(dest_timeout, TcpStream::connect(validated_addr)).await {
-        Ok(Ok(s)) => s,
-        Ok(Err(_)) => return Err(RequestErrorCode::ConnectFailed),
-        Err(_) => return Err(RequestErrorCode::Timeout),
-    };
+        let mut stream = TcpStream::connect(validated_addr)
+            .await
+            .map_err(|_| RequestErrorCode::ConnectFailed)?;
 
-    let io_future = async {
         stream
             .write_all(&req.body)
             .await
@@ -1493,7 +1492,7 @@ async fn execute_destination_request(
         Ok(resp)
     };
 
-    match timeout(dest_timeout, io_future).await {
+    match timeout(dest_timeout, exec_future).await {
         Ok(res) => res,
         Err(_) => Err(RequestErrorCode::Timeout),
     }

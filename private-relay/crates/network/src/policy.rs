@@ -18,6 +18,7 @@ impl DestinationPolicy {
     pub async fn resolve_and_validate(&self, target: &str) -> Result<SocketAddr, NetworkError> {
         if target.is_empty()
             || target.len() > MAX_TARGET_ADDR_LEN
+            || target.contains('%')
             || target.chars().any(|c| c.is_control() || c.is_whitespace())
         {
             return Err(NetworkError::PolicyDenied(
@@ -90,10 +91,6 @@ impl DestinationPolicy {
     }
 
     fn validate_ipv6(&self, ip: Ipv6Addr) -> Result<(), NetworkError> {
-        if let Some(mapped_v4) = ip.to_ipv4_mapped() {
-            return self.validate_ipv4(mapped_v4);
-        }
-
         if ip.is_loopback() {
             if self.allow_loopback_for_test {
                 return Ok(());
@@ -101,17 +98,41 @@ impl DestinationPolicy {
             return Err(NetworkError::PolicyDenied("loopback IPv6 denied".into()));
         }
 
+        // Convert both IPv4-mapped (`::ffff:0:0/96`) and deprecated IPv4-compatible (`::/96`)
+        // addresses to IPv4 so loopback/private/metadata IPv4 rules cannot be bypassed via `::127.0.0.1`.
+        if !ip.is_unspecified() {
+            if let Some(embedded_v4) = ip.to_ipv4() {
+                return self.validate_ipv4(embedded_v4);
+            }
+        }
+
         let segments = ip.segments();
-        let is_link_local = (segments[0] & 0xffc0) == 0xfe80;
-        let is_unique_local = (segments[0] & 0xfe00) == 0xfc00;
+        let is_discard =
+            segments[0] == 0x0100 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
         let is_nat64 = segments[0] == 0x0064 && segments[1] == 0xff9b;
+        let is_teredo = segments[0] == 0x2001 && segments[1] == 0x0000;
+        let is_benchmark_v6 =
+            segments[0] == 0x2001 && segments[1] == 0x0002 && segments[2] == 0x0000;
         let is_doc = segments[0] == 0x2001 && segments[1] == 0x0db8;
+        let is_6to4 = segments[0] == 0x2002;
+        let is_unique_local = (segments[0] & 0xfe00) == 0xfc00;
+        let is_link_local = (segments[0] & 0xffc0) == 0xfe80;
+        let is_site_local = (segments[0] & 0xffc0) == 0xfec0;
+        let is_ipv4_translated =
+            segments[0..4] == [0, 0, 0, 0] && segments[4] == 0xffff && segments[5] == 0;
+
         if ip.is_unspecified()
             || ip.is_multicast()
-            || is_link_local
-            || is_unique_local
+            || is_discard
             || is_nat64
+            || is_teredo
+            || is_benchmark_v6
             || is_doc
+            || is_6to4
+            || is_unique_local
+            || is_link_local
+            || is_site_local
+            || is_ipv4_translated
         {
             return Err(NetworkError::PolicyDenied(
                 "private or reserved IPv6 denied".into(),

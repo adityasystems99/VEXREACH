@@ -70,8 +70,19 @@ async fn ssrf_policy_blocks_private_and_loopback_by_default() {
         IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)),
         IpAddr::V6(Ipv6Addr::LOCALHOST),
         IpAddr::V6("fe80::1".parse().unwrap()),
+        IpAddr::V6("fec0::1".parse().unwrap()),
         IpAddr::V6("fc00::1".parse().unwrap()),
+        IpAddr::V6("100::1".parse().unwrap()),
+        IpAddr::V6("64:ff9b::127.0.0.1".parse().unwrap()),
+        IpAddr::V6("2001::1".parse().unwrap()),
+        IpAddr::V6("2001:2::1".parse().unwrap()),
+        IpAddr::V6("2002:7f00:1::".parse().unwrap()),
+        IpAddr::V6("2002:a9fe:a9fe::".parse().unwrap()),
         IpAddr::V6("::ffff:127.0.0.1".parse().unwrap()),
+        IpAddr::V6("::127.0.0.1".parse().unwrap()),
+        IpAddr::V6("::10.0.0.1".parse().unwrap()),
+        IpAddr::V6("::169.254.169.254".parse().unwrap()),
+        IpAddr::V6("::ffff:0:127.0.0.1".parse().unwrap()),
     ] {
         assert!(
             matches!(
@@ -88,6 +99,23 @@ async fn ssrf_policy_blocks_private_and_loopback_by_default() {
 
     let res = default_policy.resolve_and_validate("127.0.0.1:8080").await;
     assert!(matches!(res, Err(NetworkError::PolicyDenied(_))));
+
+    let zone_res = default_policy
+        .resolve_and_validate("[fe80::1%eth0]:80")
+        .await;
+    assert!(matches!(zone_res, Err(NetworkError::PolicyDenied(_))));
+
+    // Loopback test override never loosens metadata/private transition addresses.
+    let loopback_policy = DestinationPolicy {
+        allow_loopback_for_test: true,
+        allowed_targets: Vec::new(),
+    };
+    assert!(loopback_policy
+        .validate_ip(IpAddr::V6("::169.254.169.254".parse().unwrap()))
+        .is_err());
+    assert!(loopback_policy
+        .validate_ip(IpAddr::V6("2002:a9fe:a9fe::".parse().unwrap()))
+        .is_err());
 
     // Explicit test loopback flag + allowlist works only for listed targets.
     let test_policy = DestinationPolicy {

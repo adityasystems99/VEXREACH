@@ -99,9 +99,10 @@
   3. `multi_process_os_three_hop_demo_and_failure_scenarios` — Passed (4 unique server/relay OS PIDs + client: `/health`, `0B`, `65_536B`, `/max-64kib`, `/redirect-ssrf`, `65_537B` reject, `/oversized` abort, `/slow` timeout, `PolicyDenied`, `ConnectFailed`, mid-flight Middle kill, plus verified `STATUS=READY`, `"relay node started"`, `"circuit hop established"` across Entry/Middle/Exit logs with zero leaked IPs/paths/bodies/keys)
 
 ### Live Windows PowerShell Demo Transcript Summary (`demo/run-demo.ps1 -AutoStartStop`)
-- Ephemeral keygen (`demo/generated/`, gitignored) + 4 background OS processes (`demo-dest PID=39460`, `relay-exit PID=39500`, `relay-middle PID=45592`, `relay-entry PID=42288`) started and torn down cleanly via `stop-demo.ps1`.
-- Executed scenarios `1..10`: empty `0B` (`137ms`), `/health` (`99ms`, `HTTP/1.1 200 OK`, `142B`), `/medium` (`168ms`, `12375B`), exact `65536B` raw (`675ms`, `65536B`), `/max-64kib` (`375ms`, `65536B`), `/redirect-ssrf` (`98ms`, `302 Found` unfollowed), `65537B` (`REJECTED_LOCALLY`, `81ms`), unlisted target `127.0.0.1:9099` (`PolicyDenied`, `89ms`), `/oversized` (`PayloadTooLarge`, `94ms`), and `/slow` (`Timeout`, `2601ms`).
+- Ephemeral keygen (`demo/generated/`, gitignored) + 4 background OS processes (`demo-dest PID=34804`, `relay-exit PID=30072`, `relay-middle PID=42360`, `relay-entry PID=36612`) started and torn down cleanly via `stop-demo.ps1` (`PRE_PROCS=0`, `POST_PROCS=0`, `POST_PIDFILE=False`).
+- Executed scenarios `1..10`: empty `0B` (`113ms`), `/health` (`95ms`, `HTTP/1.1 200 OK`, `142B`), `/medium` (`187ms`, `12375B`), exact `65536B` raw (`620ms`, `65536B`), `/max-64kib` (`394ms`, `65536B`), `/redirect-ssrf` (`99ms`, `302 Found` unfollowed), `65537B` (`REJECTED_LOCALLY`, `88ms`), unlisted target `127.0.0.1:9099` (`PolicyDenied`, `91ms`), `/oversized` (`PayloadTooLarge`, `97ms`), and `/slow` (`Timeout`, `2610ms`).
 - Multi-process log verification in `demo/logs/`: `relay-entry`, `relay-middle`, and `relay-exit` each recorded `STATUS=READY` and `circuit_hops=10` without logging IP addresses, target paths, payloads, or key hex values.
+- Full Day 4 independent engineering audit results (`D4-01` IPv6 SSRF fix, `D4-02` sliding replay/deadline fix, offline `cargo tree` license/`0`-`unsafe` check, & fresh demo/test reproduction) are recorded in [DAY4_VERIFICATION_REPORT.md](./DAY4_VERIFICATION_REPORT.md).
 
 ---
 

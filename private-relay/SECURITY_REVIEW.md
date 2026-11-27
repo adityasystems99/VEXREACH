@@ -90,12 +90,25 @@
 - **Fix / Mitigation:** Accepted trade-off for fixed 3-role `Entry -> Middle -> Exit` topology (`v0.1`); Sphinx constant-size headers are out of scope beyond `v0.1`.
 - **Verification:** Documented in [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) and [PROTOCOL_SPEC.md](./PROTOCOL_SPEC.md).
 
+### `[D4-01]` IPv6 Transition/Embedded SSRF Bypasses (`::/96`, `2002::/16`, `fec0::/10`, Zone IDs) — **Medium (Fixed in Day 4 Audit)**
+- **Location:** `crates/network/src/policy.rs` (`DestinationPolicy::validate_ipv6`, `resolve_and_validate`).
+- **Impact:** Checking only `ip.to_ipv4_mapped()` allowed deprecated IPv4-compatible IPv6 (`::127.0.0.1`, `::10.0.0.1`, `::169.254.169.254`) plus `fec0::/10`, `0100::/64`, `2001::/32`, `2002::/16`, `::ffff:0:0:0/96`, and `%` IPv6 zone IDs to bypass default SSRF filters when `allowed_targets` was empty.
+- **Reproduction:** Pass `[::127.0.0.1]:80` or `[::169.254.169.254]:80` to `DestinationPolicy::validate_ip`, or `[fe80::1%eth0]:80` to `resolve_and_validate`.
+- **Fix:** Rejected `'%'` in `resolve_and_validate`; switched non-unspecified/non-loopback checks to `ip.to_ipv4()` (covering `::ffff:0:0/96` and `::/96`); blocked `0100::/64`, `2001::/32`, `2001:2::/48`, `2002::/16`, `fec0::/10`, and `::ffff:0:0:0/96`.
+- **Verification:** Expanded `ssrf_policy_blocks_private_and_loopback_by_default` (`crates/network/tests/network_tests.rs`, `5/5` passed) and documented full audit in [DAY4_VERIFICATION_REPORT.md](./DAY4_VERIFICATION_REPORT.md).
+
+### `[D4-02]` Exit Sliding Replay Window & Total Destination Deadline — **Low (Hardened in Day 4 Audit)**
+- **Location:** `crates/relay/src/engine.rs` (`run_exit_circuit_task`, `execute_destination_request`).
+- **Impact:** Clearing `used_request_ids` at capacity `4096` wiped recent history, and 3 separate timeouts (`DNS + connect + write/read`) allowed up to `3 * dest_timeout` cumulative wait.
+- **Remediation:** Replaced full clear with bounded FIFO sliding eviction (`VecDeque<u32>`) and enforced a single cumulative `timeout(dest_timeout, ...)` across DNS resolution, connect, write, and read.
+- **Verification:** Verified via `exit_enforces_destination_timeout_and_cleans_up_circuit` (`6/6` relay tests) and live `demo/run-demo.ps1 -AutoStartStop` (`/slow`, `2610ms`).
+
 ### `[KI-09]` Unverified Third-Party Audit, Fuzzing & Offline Dependency Scanner Gaps — **Informational (Pre-Production Gate)**
 - **Location:** Workspace build & verification scope (`Cargo.lock`, [TEST_RESULTS.md](./TEST_RESULTS.md)).
 - **Impact:** `cargo-fuzz`, `cargo-audit`, `cargo-deny`, external cryptographic review, and WAN container/multi-host soak tests have NOT been executed.
-- **Reproduction:** Run `cargo-audit` in this environment (`cargo-audit` binary absent).
+- **Reproduction:** Run `cargo-audit` in this environment (`cargo-audit`, `cargo-deny`, `osv-scanner`, and local `advisory-db` absent).
 - **Fix / Mitigation:** Maintain strict research-prototype classification until independent audit, fuzzing, and CVE advisory scanning complete.
-- **Verification:** Tooling audit confirmed `cargo-audit` / `cargo-deny` unavailable locally; all `40/40` local unit, integration, and multi-process OS tests pass.
+- **Verification:** Offline `cargo tree` / license inventory and `0`-match `unsafe` scan across `crates/` verified cleanly in [DAY4_VERIFICATION_REPORT.md](./DAY4_VERIFICATION_REPORT.md); all `40/40` workspace tests pass.
 
 ---
 

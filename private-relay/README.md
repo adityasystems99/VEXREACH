@@ -26,6 +26,7 @@ See [demo/README.md](./demo/README.md) for exact manual 5-terminal commands, key
 - [PROTOCOL_SPEC.md](./PROTOCOL_SPEC.md) — Wire framing (`600B` outer Noise link frames, `9B` cell headers), telescopic `Noise_NK` circuits, `ChaCha20-Poly1305` layering, replay rules, and limitations.
 - [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) — Primitive selection, `HKDF-SHA256` directional key separation, link rekeying (`D-09`), deterministic nonces, SSRF/DNS bounds, and log redaction rules.
 - [SECURITY_REVIEW.md](./SECURITY_REVIEW.md) — Classified Day 3 internal security review (`Critical`/`High`/`Medium`/`Low`/`Informational`, 16-point inspection, limitations, and external audit gates).
+- [DAY4_VERIFICATION_REPORT.md](./DAY4_VERIFICATION_REPORT.md) — Independent Day 4 engineering audit report (protocol trace, `D4-01`/`D4-02` remediations, live demo PID leak check, & offline dependency/license verification).
 - [THREAT_MODEL.md](./THREAT_MODEL.md) — Analysis of 9 threat categories + verification tests.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Trust boundaries, RAM state tables, and 6 Mermaid diagrams (architecture, trust zones, circuit build, request flow, response flow, failure teardown).
 
