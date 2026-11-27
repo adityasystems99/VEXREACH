@@ -24,7 +24,7 @@
 1. Relay `A` connects to Relay `B` over TCP using `B`'s expected static `X25519` key (`static_pub_B`).
 2. `Noise_IK`: `A -> B: e, es, s, ss` (`msg1`), `B -> A: e, ee, se` (`msg2`).
 3. Both peers verify `rs == expected_static_pub`, extract split Noise `TransportState` (`tx`, `rx`), and wrap all cell I/O in fixed `600`-byte total on-wire Noise frames (`2B` length prefix `== 598` + `582B` padded outer plaintext + `16B` Noise MAC = `600B`).
-4. **Link Rekey:** Link TCP session closes cleanly and renegotiates fresh ephemeral Noise keys every `3600s` (`1 hour`) or `1 GiB` transferred.
+4. **Link Rekey (`Implemented Day 3 — D-09`):** `LinkSession` enforces configurable time (`3600s` default) and byte (`1 GiB` default) rotation thresholds before sending past threshold. Outgoing sender emits a `600`-byte encrypted `RekeyControl` frame (`0xFFFF || b"PR_REKEY" || version || monotonic_epoch`) at nonce `n` and calls `snow::TransportState::rekey_outgoing()`, advancing keys while keeping nonces strictly monotonic; receiver authenticates `RekeyControl`, verifies `epoch == expected + 1`, and calls `rekey_incoming()`, failing closed (`is_failed() = true` + connection drop) on any AEAD, magic, epoch, or truncated-frame error.
 
 ### 2.2 Telescopic Circuit Layer (`Client ↔ Hop i ∈ {1, 2, 3}`)
 For each hop `i`:

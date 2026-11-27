@@ -1,0 +1,26 @@
+# TEMPLATE ONLY - NEVER COMMIT LIVE OR DEMO PRIVATE KEYS
+# Generated at runtime into `demo/generated/middle.toml` via `relay-keygen`.
+
+id = "demo-middle-1"
+role = "middle"
+listen_addr = "127.0.0.1:9102"
+public_key_hex = "<GENERATED_64_HEX_PUBLIC_KEY>"
+private_key_hex = "<GENERATED_64_HEX_PRIVATE_KEY>"
+allow_loopback_for_test = false
+allowed_targets = []
+max_concurrent_connections = 256
+max_concurrent_circuits = 1024
+max_circuits_per_peer_ip = 16
+circuit_channel_capacity = 64
+handshake_timeout_ms = 5000
+io_timeout_ms = 5000
+destination_io_timeout_ms = 10000
+idle_circuit_ttl_secs = 120
+link_rekey_interval_secs = 3600
+link_rekey_bytes = 1073741824
+
+[[allowed_next_peers]]
+id = "demo-exit-1"
+role = "exit"
+addr = "127.0.0.1:9103"
+public_key_hex = "<GENERATED_EXIT_PUBLIC_KEY>"

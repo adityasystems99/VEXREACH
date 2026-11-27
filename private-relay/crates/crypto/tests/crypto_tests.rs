@@ -1,11 +1,14 @@
+use std::time::Duration;
+
 use private_relay_crypto::{
     parse_public_key, ClientCircuitCrypto, CryptoError, HopCipherState, HopHandshakeInitiator,
-    HopHandshakeResponder, LinkInitiator, LinkResponder, StaticKeypair,
+    HopHandshakeResponder, LinkInitiator, LinkRekeyPolicy, LinkResponder, StaticKeypair,
 };
 use private_relay_protocol::{
-    chunk_request, chunk_response, Cell, CircuitId, Command, DestroyReason, ExtendDirective,
-    HopDirection, InnerPayload, MessageReassembler, ReassembledMessage, RelayHopPlaintext,
-    RequestId, MAX_CIRCUIT_SEQ, OUTER_WIRE_FRAME_BYTES,
+    chunk_request, chunk_response, encode_wire_record, Cell, CircuitId, Command, DestroyReason,
+    ExtendDirective, HopDirection, InnerPayload, LinkFrame, MessageReassembler,
+    OuterFramePlaintext, ReassembledMessage, RelayHopPlaintext, RequestId, MAX_CIRCUIT_SEQ,
+    OUTER_PLAINTEXT_LEN, OUTER_WIRE_FRAME_BYTES,
 };
 use zeroize::Zeroizing;
 
@@ -245,4 +248,129 @@ fn three_hop_layered_onion_forward_and_backward_roundtrip() {
         handshake_msg1: vec![1; 80],
     };
     let _d = DestroyReason::Normal;
+}
+
+#[test]
+fn static_keypair_rejects_mismatched_and_zero_keys() {
+    let kp_a = StaticKeypair::generate().unwrap();
+    let kp_b = StaticKeypair::generate().unwrap();
+
+    // Valid matching pair succeeds.
+    assert!(StaticKeypair::from_slices(kp_a.secret_bytes(), kp_a.public()).is_ok());
+    // Mismatched secret + public fails immediately.
+    assert_eq!(
+        StaticKeypair::from_slices(kp_a.secret_bytes(), kp_b.public()).err(),
+        Some(CryptoError::InvalidKeyMaterial)
+    );
+    // All-zero keys rejected.
+    assert_eq!(
+        StaticKeypair::from_slices(&[0u8; 32], kp_a.public()).err(),
+        Some(CryptoError::InvalidKeyMaterial)
+    );
+    assert_eq!(
+        StaticKeypair::from_slices(kp_a.secret_bytes(), &[0u8; 32]).err(),
+        Some(CryptoError::InvalidKeyMaterial)
+    );
+}
+
+#[test]
+fn link_rekey_synchronization_boundary_simultaneous_and_fail_closed() {
+    let client_kp = StaticKeypair::generate().unwrap();
+    let srv_kp = StaticKeypair::generate().unwrap();
+
+    let mut init = LinkInitiator::new(&client_kp, *srv_kp.public()).unwrap();
+    let msg1 = init.write_msg1().unwrap();
+    let (msg2, mut srv) = LinkResponder::new(&srv_kp)
+        .unwrap()
+        .process_msg1_and_finish(&msg1)
+        .unwrap();
+    let mut cli = init.finish_with_msg2(&msg2).unwrap();
+
+    // 1. Byte boundary threshold check (1200B = 2 frames).
+    cli.set_rekey_policy(LinkRekeyPolicy {
+        max_bytes: 1200,
+        max_age: Duration::from_secs(3600),
+    });
+    let cid = CircuitId::new(1).unwrap();
+    let c1 = Cell::new(cid, Command::Create, 0, vec![1; 10]).unwrap();
+    assert!(!cli.should_rekey_outgoing());
+    let w1 = cli.seal_cell(&c1).unwrap();
+    assert_eq!(srv.open_cell(&w1).unwrap(), c1);
+    assert!(!cli.should_rekey_outgoing());
+    let w2 = cli.seal_cell(&c1).unwrap();
+    assert_eq!(srv.open_cell(&w2).unwrap(), c1);
+    assert!(cli.should_rekey_outgoing());
+
+    // Execute coordinated outgoing rekey -> verify nonces never reset & post-rekey cells succeed.
+    let nonce_before = cli.sending_nonce();
+    let rk1 = cli.seal_rekey_and_rotate().unwrap();
+    assert!(!cli.should_rekey_outgoing());
+    assert_eq!(cli.rekey_epochs(), (1, 0));
+    assert_eq!(
+        srv.open_frame(&rk1).unwrap(),
+        LinkFrame::RekeyControl { epoch: 1 }
+    );
+    assert_eq!(srv.rekey_epochs(), (0, 1));
+    assert_eq!(cli.sending_nonce(), nonce_before + 1);
+    assert_eq!(srv.receiving_nonce(), nonce_before + 1);
+
+    let c_after = Cell::new(cid, Command::RelayData, 0, vec![7; 32]).unwrap();
+    let w_after = cli.seal_cell(&c_after).unwrap();
+    assert_eq!(srv.open_cell(&w_after).unwrap(), c_after);
+
+    // 2. Simultaneous bidirectional rekey before reading each other's control frames.
+    let rk_c2s = cli.seal_rekey_and_rotate().unwrap();
+    let rk_s2c = srv.seal_rekey_and_rotate().unwrap();
+    assert_eq!(
+        srv.open_frame(&rk_c2s).unwrap(),
+        LinkFrame::RekeyControl { epoch: 2 }
+    );
+    assert_eq!(
+        cli.open_frame(&rk_s2c).unwrap(),
+        LinkFrame::RekeyControl { epoch: 1 }
+    );
+    let c_bidir = Cell::new(cid, Command::RelayData, 0, vec![9; 24]).unwrap();
+    assert_eq!(
+        cli.open_cell(&srv.seal_cell(&c_bidir).unwrap()).unwrap(),
+        c_bidir
+    );
+    assert_eq!(
+        srv.open_cell(&cli.seal_cell(&c_bidir).unwrap()).unwrap(),
+        c_bidir
+    );
+
+    // 3. Time threshold trigger check (`max_age = 0ms`).
+    cli.set_rekey_policy(LinkRekeyPolicy {
+        max_bytes: u64::MAX,
+        max_age: Duration::from_millis(0),
+    });
+    assert!(cli.should_rekey_outgoing());
+
+    // 4. Fail-closed on old-epoch replay / tampered rekey frame / malformed control plaintext.
+    assert_eq!(srv.open_frame(&w1), Err(CryptoError::AuthenticationFailed));
+    assert!(srv.is_failed());
+    assert!(matches!(
+        srv.seal_cell(&c_after),
+        Err(CryptoError::InvalidState(_))
+    ));
+
+    // Malformed RekeyControl frame (corrupted magic) over fresh session fails closed too.
+    let mut init2 = LinkInitiator::new(&client_kp, *srv_kp.public()).unwrap();
+    let msg1b = init2.write_msg1().unwrap();
+    let (msg2b, mut srv2) = LinkResponder::new(&srv_kp)
+        .unwrap()
+        .process_msg1_and_finish(&msg1b)
+        .unwrap();
+    let _cli2 = init2.finish_with_msg2(&msg2b).unwrap();
+    assert!(OuterFramePlaintext::pack_rekey_control(0, &[0u8; OUTER_PLAINTEXT_LEN]).is_err());
+    let mut bad_plain = [0u8; OUTER_PLAINTEXT_LEN];
+    bad_plain[0..2].copy_from_slice(&0xFFFFu16.to_be_bytes());
+    bad_plain[2..10].copy_from_slice(b"BADMAGIC");
+    assert!(OuterFramePlaintext::unpack_link_frame(&bad_plain).is_err());
+
+    let mut bad_len_wire = [0u8; OUTER_WIRE_FRAME_BYTES];
+    assert!(encode_wire_record(&bad_len_wire[..598]).is_ok());
+    bad_len_wire[0..2].copy_from_slice(&597u16.to_be_bytes());
+    assert!(srv2.open_frame(&bad_len_wire).is_err());
+    assert!(srv2.is_failed());
 }

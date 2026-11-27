@@ -35,23 +35,24 @@ flowchart LR
 
 ## 2. Component Responsibilities & Trust Boundaries
 
-1. **Client (`client/`):**
-   - Loads verified relay descriptors (`v0.1`: `relays.toml`; `Phase 5`: signed Coordinator snapshot).
-   - Initiates telescopic 3-hop circuit (`CREATE` → `EXTEND` → `EXTEND`).
+1. **Client (`crates/client/`):**
+   - Loads verified relay descriptors (`v0.1`: `ClientConfigFile` TOML via `relay-keygen` / `client.toml`; `Phase 5`: signed Coordinator snapshot).
+   - Initiates telescopic 3-hop circuit (`CREATE` → `EXTEND` → `EXTEND`) using ephemeral per-session `Noise_IK` keypairs.
    - Wraps bounded requests (`<= 64 KiB`) into fixed inner fragments, encrypts 3 times (`Exit → Middle → Entry`), sends over Entry's `Noise_IK` link, and peels 3 response layers.
-2. **Protocol Framing (`protocol/`):**
-   - Pure, zero-I/O binary serialization/deserialization for `OuterLinkFrame` (`600` bytes), `CellHeader`, `CreatePayload`, `ExtendPayload`, `RelayDataEnvelope`, and `InnerPayload`.
+2. **Protocol Framing (`crates/protocol/`):**
+   - Pure, zero-I/O binary serialization/deserialization for `OuterFramePlaintext` (`600` bytes), `LinkFrame::RekeyControl` (`D-09`), `Cell` (`9B` header), `ExtendDirective`, `RelayHopPlaintext`, and `InnerPayload`.
    - Enforces strict bounds and length invariants prior to crypto or allocation.
-3. **Cryptographic Engine (`crypto/`):**
-   - Wraps `snow` (`Noise_IK` outer links, `Noise_NK` inner telescopic hops), `hkdf` (`HKDF-SHA256`), `chacha20poly1305`, and `zeroize`.
-   - Owns directional cipher states (`ForwardCipher`, `BackwardCipher`) with strict monotonic `u64` nonce sequence checks.
-4. **Relay Core (`relay/`):**
+3. **Cryptographic Engine (`crates/crypto/`):**
+   - Wraps `snow v0.9.6` (`Noise_IK` outer links + synchronized Section 4.2/11.3 link rekeying `D-09`, `Noise_NK` inner telescopic hops + `D-08` transcript-salted HKDF exporter), `hkdf`, `chacha20poly1305`, and `zeroize`.
+   - Owns directional cipher states (`HopCipherPair`) with strict monotonic `u64` nonce sequence checks and X25519 keypair consistency validation.
+4. **Network & Policy Layer (`crates/network/`):**
+   - Owns typed TOML configuration validation (`RelayConfig`, `ClientConfigFile`), `DestinationPolicy` (DNS-once SSRF blocking), and async `LinkReader`/`LinkWriter` transport halves.
+5. **Relay Core (`crates/relay/`):**
    - Operates uniformly across `Entry`, `Middle`, and `Exit` roles via configuration (`role = "entry" | "middle" | "exit"`).
-   - Maintains two isolated tables:
-     - `PeerLinkPool`: Persistent `Noise_IK` TCP connections keyed by adjacent peer address/identity.
-     - `CircuitTable`: Bounded map `in_circuit_id -> CircuitRoute` holding either `ForwardToNextHop { out_peer, out_cid, fwd_key, bwd_key }` or `ExitEndpoint { fwd_key, bwd_key, policy }`.
-   - Enforces Exit SSRF IP filtering, DNS resolution (at Exit only), and bounded `mpsc` channels.
-5. **Coordinator (`coordinator/` — Deferred to Phase 5):**
+   - Enforces accept-time `max_concurrent_connections` semaphore, `max_concurrent_circuits`, Entry `max_circuits_per_peer_ip`, bounded `mpsc` channels, cancellation-safe hop extension, and direct validated `SocketAddr` connect at Exit.
+6. **CLI Binaries (`crates/cli/`) & Local Demo (`demo/`):**
+   - Standalone executables (`relay-entry`, `relay-middle`, `relay-exit`, `relay-client`, `demo-dest`, `relay-keygen`) running as separate OS processes over localhost TCP sockets.
+7. **Coordinator (`coordinator/` — Deferred to Phase 5):**
    - Optional HTTP/Axum registry + PostgreSQL store for relay health and signed descriptor publishing. Not created until Phase 5.
 
 ### Cryptographic & Trust Boundaries

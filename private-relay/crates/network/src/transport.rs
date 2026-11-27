@@ -1,8 +1,12 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use private_relay_crypto::{LinkInitiator, LinkResponder, LinkSession, StaticKeypair};
-use private_relay_protocol::{Cell, OUTER_WIRE_FRAME_BYTES, X25519_KEY_LEN};
+use private_relay_crypto::{
+    LinkInitiator, LinkRekeyPolicy, LinkResponder, LinkSession, StaticKeypair,
+};
+use private_relay_protocol::{
+    Cell, LinkFrame, ProtocolError, OUTER_WIRE_FRAME_BYTES, X25519_KEY_LEN,
+};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -29,42 +33,152 @@ impl<R: AsyncRead + Unpin> LinkReader<R> {
         self.recv_cell_with_timeouts(io_timeout, io_timeout).await
     }
 
+    /// Returns `(outgoing_rekey_epoch, incoming_rekey_epoch)` for diagnostics and testing.
+    pub fn rekey_epochs(&self) -> Result<(u64, u64), NetworkError> {
+        let guard = self
+            .session
+            .lock()
+            .map_err(|_| NetworkError::PolicyDenied("session mutex poisoned".into()))?;
+        Ok(guard.rekey_epochs())
+    }
+
     /// Reads exact `600`-byte wire record allowing a longer idle wait before byte 0 arrives, while
-    /// bounding partial mid-frame completion (`wire[1..]`) by `frame_io_timeout`.
+    /// bounding partial mid-frame completion (`wire[1..]`) by `frame_io_timeout` and consuming any
+    /// synchronized `RekeyControl` frames atomically without resetting the deadline.
     pub async fn recv_cell_with_timeouts(
         &mut self,
         idle_timeout: Duration,
         frame_io_timeout: Duration,
     ) -> Result<Cell, NetworkError> {
-        let mut wire = [0u8; OUTER_WIRE_FRAME_BYTES];
-        match timeout(idle_timeout, self.reader.read(&mut wire[..1])).await {
-            Ok(Ok(0)) => return Err(NetworkError::ConnectionClosed),
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => return Err(NetworkError::from(e)),
-            Err(_) => return Err(NetworkError::Timeout("waiting for link frame")),
-        }
+        const MAX_CONSECUTIVE_REKEYS: u32 = 4;
+        let deadline = tokio::time::Instant::now() + idle_timeout;
+        let mut consecutive_rekeys = 0u32;
 
-        match timeout(frame_io_timeout, self.reader.read_exact(&mut wire[1..])).await {
-            Ok(Ok(_read_len)) => {}
-            Ok(Err(e)) => return Err(NetworkError::from(e)),
-            Err(_) => return Err(NetworkError::Timeout("reading link frame body")),
-        }
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(NetworkError::Timeout("waiting for link frame"));
+            }
+            let remaining_idle = deadline.saturating_duration_since(now);
 
-        let mut guard = self
-            .session
-            .lock()
-            .map_err(|_| NetworkError::PolicyDenied("session mutex poisoned".into()))?;
-        Ok(guard.open_cell(&wire)?)
+            let mut wire = [0u8; OUTER_WIRE_FRAME_BYTES];
+            match timeout(remaining_idle, self.reader.read(&mut wire[..1])).await {
+                Ok(Ok(0)) => {
+                    if let Ok(mut guard) = self.session.lock() {
+                        guard.mark_failed();
+                    }
+                    return Err(NetworkError::ConnectionClosed);
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    if let Ok(mut guard) = self.session.lock() {
+                        guard.mark_failed();
+                    }
+                    return Err(NetworkError::from(e));
+                }
+                Err(_) => return Err(NetworkError::Timeout("waiting for link frame")),
+            }
+
+            match timeout(frame_io_timeout, self.reader.read_exact(&mut wire[1..])).await {
+                Ok(Ok(_read_len)) => {}
+                Ok(Err(e)) => {
+                    if let Ok(mut guard) = self.session.lock() {
+                        guard.mark_failed();
+                    }
+                    return Err(NetworkError::from(e));
+                }
+                Err(_) => {
+                    if let Ok(mut guard) = self.session.lock() {
+                        guard.mark_failed();
+                    }
+                    return Err(NetworkError::Timeout("reading link frame body"));
+                }
+            }
+
+            let frame = {
+                let mut guard = self
+                    .session
+                    .lock()
+                    .map_err(|_| NetworkError::PolicyDenied("session mutex poisoned".into()))?;
+                guard.open_frame(&wire)?
+            };
+
+            match frame {
+                LinkFrame::Cell(cell) => return Ok(cell),
+                LinkFrame::RekeyControl { .. } => {
+                    consecutive_rekeys += 1;
+                    if consecutive_rekeys > MAX_CONSECUTIVE_REKEYS {
+                        if let Ok(mut guard) = self.session.lock() {
+                            guard.mark_failed();
+                        }
+                        return Err(NetworkError::Protocol(ProtocolError::MalformedPayload(
+                            "excessive consecutive rekey control frames",
+                        )));
+                    }
+                }
+            }
+        }
     }
 }
 
 impl<W: AsyncWrite + Unpin> LinkWriter<W> {
+    /// Returns `(outgoing_rekey_epoch, incoming_rekey_epoch)` for diagnostics and testing.
+    pub fn rekey_epochs(&self) -> Result<(u64, u64), NetworkError> {
+        let guard = self
+            .session
+            .lock()
+            .map_err(|_| NetworkError::PolicyDenied("session mutex poisoned".into()))?;
+        Ok(guard.rekey_epochs())
+    }
+
+    /// Explicitly transmits an authenticated `RekeyControl` frame and advances the outgoing cipher key.
+    pub async fn trigger_rekey(&mut self, io_timeout: Duration) -> Result<(), NetworkError> {
+        let rekey_wire = {
+            let mut guard = self
+                .session
+                .lock()
+                .map_err(|_| NetworkError::PolicyDenied("session mutex poisoned".into()))?;
+            guard.seal_rekey_and_rotate()?
+        };
+        if let Err(e) = write_frame_with_timeout(&mut self.writer, &rekey_wire, io_timeout).await {
+            if let Ok(mut guard) = self.session.lock() {
+                guard.mark_failed();
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
     /// Seals `Cell` into fixed `600`-byte Noise frame and writes atomically with timeout (handling partial TCP writes).
+    /// Automatically rotates the outgoing cipher first when byte/time rekey thresholds are reached.
     pub async fn send_cell(
         &mut self,
         cell: &Cell,
         io_timeout: Duration,
     ) -> Result<(), NetworkError> {
+        let maybe_rekey = {
+            let mut guard = self
+                .session
+                .lock()
+                .map_err(|_| NetworkError::PolicyDenied("session mutex poisoned".into()))?;
+            if guard.should_rekey_outgoing() {
+                Some(guard.seal_rekey_and_rotate()?)
+            } else {
+                None
+            }
+        };
+
+        if let Some(rekey_wire) = maybe_rekey {
+            if let Err(e) =
+                write_frame_with_timeout(&mut self.writer, &rekey_wire, io_timeout).await
+            {
+                if let Ok(mut guard) = self.session.lock() {
+                    guard.mark_failed();
+                }
+                return Err(e);
+            }
+        }
+
         let wire = {
             let mut guard = self
                 .session
@@ -73,15 +187,29 @@ impl<W: AsyncWrite + Unpin> LinkWriter<W> {
             guard.seal_cell(cell)?
         };
 
-        match timeout(io_timeout, write_all_and_flush(&mut self.writer, &wire)).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(NetworkError::from(e)),
-            Err(_) => Err(NetworkError::Timeout("writing link frame")),
+        if let Err(e) = write_frame_with_timeout(&mut self.writer, &wire, io_timeout).await {
+            if let Ok(mut guard) = self.session.lock() {
+                guard.mark_failed();
+            }
+            return Err(e);
         }
+        Ok(())
     }
 
     pub async fn shutdown(&mut self) -> Result<(), NetworkError> {
         self.writer.shutdown().await.map_err(NetworkError::from)
+    }
+}
+
+async fn write_frame_with_timeout<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    wire: &[u8; OUTER_WIRE_FRAME_BYTES],
+    io_timeout: Duration,
+) -> Result<(), NetworkError> {
+    match timeout(io_timeout, write_all_and_flush(writer, wire)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(NetworkError::from(e)),
+        Err(_) => Err(NetworkError::Timeout("writing link frame")),
     }
 }
 
@@ -123,6 +251,30 @@ pub async fn connect_noise_link(
     ),
     NetworkError,
 > {
+    connect_noise_link_with_rekey(
+        addr,
+        local_keypair,
+        expected_remote_pub,
+        handshake_timeout,
+        LinkRekeyPolicy::default(),
+    )
+    .await
+}
+
+/// Outbound TCP connect + `Noise_IK` handshake configuring a custom [`LinkRekeyPolicy`].
+pub async fn connect_noise_link_with_rekey(
+    addr: &str,
+    local_keypair: &StaticKeypair,
+    expected_remote_pub: [u8; X25519_KEY_LEN],
+    handshake_timeout: Duration,
+    rekey_policy: LinkRekeyPolicy,
+) -> Result<
+    (
+        LinkReader<tokio::io::ReadHalf<TcpStream>>,
+        LinkWriter<tokio::io::WriteHalf<TcpStream>>,
+    ),
+    NetworkError,
+> {
     let stream = match timeout(handshake_timeout, TcpStream::connect(addr)).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => return Err(NetworkError::from(e)),
@@ -131,7 +283,7 @@ pub async fn connect_noise_link(
     let _ = stream.set_nodelay(true);
 
     let (mut reader, mut writer) = tokio::io::split(stream);
-    let session = run_initiator_handshake(
+    let mut session = run_initiator_handshake(
         &mut reader,
         &mut writer,
         local_keypair,
@@ -139,6 +291,7 @@ pub async fn connect_noise_link(
         handshake_timeout,
     )
     .await?;
+    session.set_rekey_policy(rekey_policy);
 
     let stream = reader.unsplit(writer);
     Ok(split_framed_session(stream, session))
@@ -146,7 +299,7 @@ pub async fn connect_noise_link(
 
 /// Accepts an inbound connection + `Noise_IK` responder handshake, returning split transport & remote pubkey.
 pub async fn accept_noise_link<S>(
-    mut stream: S,
+    stream: S,
     local_keypair: &StaticKeypair,
     handshake_timeout: Duration,
 ) -> Result<
@@ -160,9 +313,36 @@ pub async fn accept_noise_link<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    accept_noise_link_with_rekey(
+        stream,
+        local_keypair,
+        handshake_timeout,
+        LinkRekeyPolicy::default(),
+    )
+    .await
+}
+
+/// Accepts an inbound Noise link configuring a custom [`LinkRekeyPolicy`].
+pub async fn accept_noise_link_with_rekey<S>(
+    mut stream: S,
+    local_keypair: &StaticKeypair,
+    handshake_timeout: Duration,
+    rekey_policy: LinkRekeyPolicy,
+) -> Result<
+    (
+        LinkReader<tokio::io::ReadHalf<S>>,
+        LinkWriter<tokio::io::WriteHalf<S>>,
+        [u8; X25519_KEY_LEN],
+    ),
+    NetworkError,
+>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let (mut reader, mut writer) = tokio::io::split(stream);
-    let session =
+    let mut session =
         run_responder_handshake(&mut reader, &mut writer, local_keypair, handshake_timeout).await?;
+    session.set_rekey_policy(rekey_policy);
     let remote_pub = *session.remote_static_pub();
     stream = reader.unsplit(writer);
     let (lr, lw) = split_framed_session(stream, session);

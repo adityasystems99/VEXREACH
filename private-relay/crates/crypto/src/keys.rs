@@ -40,11 +40,35 @@ impl StaticKeypair {
         Self::from_slices(&kp.private, &kp.public)
     }
 
-    /// Reconstructs a `StaticKeypair` from 32-byte private and public key slices.
+    /// Reconstructs a `StaticKeypair` from 32-byte private and public key slices, verifying mathematical keypair consistency.
     pub fn from_slices(private: &[u8], public: &[u8]) -> Result<Self, CryptoError> {
         if private.len() != X25519_KEY_LEN || public.len() != X25519_KEY_LEN {
             return Err(CryptoError::InvalidKeyMaterial);
         }
+        if private.iter().all(|&b| b == 0) || public.iter().all(|&b| b == 0) {
+            return Err(CryptoError::InvalidKeyMaterial);
+        }
+
+        // Verify `public == X25519(private)` using a 1-step in-memory Noise_NK AEAD consistency check.
+        let params: snow::params::NoiseParams = NOISE_NK_PARAMS
+            .parse()
+            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+        let mut init = snow::Builder::new(params.clone())
+            .remote_public_key(public)
+            .build_initiator()
+            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+        let mut resp = snow::Builder::new(params)
+            .local_private_key(private)
+            .build_responder()
+            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+        let mut probe = [0u8; 96];
+        let probe_len = init
+            .write_message(&[], &mut probe)
+            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+        let mut out = [0u8; 32];
+        resp.read_message(&probe[..probe_len], &mut out)
+            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+
         let mut sec = Zeroizing::new([0u8; X25519_KEY_LEN]);
         sec.copy_from_slice(private);
         let mut pub_key = [0u8; X25519_KEY_LEN];

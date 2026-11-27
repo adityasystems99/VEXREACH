@@ -1,0 +1,26 @@
+# TEMPLATE ONLY - NEVER COMMIT REAL KEY REFERENCES WITHOUT `relay-keygen`
+# Generated at runtime into `demo/generated/client.toml` via `relay-keygen`.
+
+handshake_timeout_ms = 5000
+io_timeout_ms = 5000
+request_timeout_ms = 10000
+link_rekey_interval_secs = 3600
+link_rekey_bytes = 1073741824
+
+[entry]
+id = "demo-entry-1"
+role = "entry"
+addr = "127.0.0.1:9101"
+public_key_hex = "<GENERATED_ENTRY_PUBLIC_KEY>"
+
+[middle]
+id = "demo-middle-1"
+role = "middle"
+addr = "127.0.0.1:9102"
+public_key_hex = "<GENERATED_MIDDLE_PUBLIC_KEY>"
+
+[exit]
+id = "demo-exit-1"
+role = "exit"
+addr = "127.0.0.1:9103"
+public_key_hex = "<GENERATED_EXIT_PUBLIC_KEY>"

@@ -1,5 +1,11 @@
-use private_relay_crypto::{parse_public_key, StaticKeypair};
-use private_relay_protocol::X25519_KEY_LEN;
+use std::net::SocketAddr;
+use std::time::Duration;
+
+use private_relay_crypto::{parse_public_key, LinkRekeyPolicy, StaticKeypair};
+use private_relay_protocol::{
+    LINK_REKEY_DEFAULT_BYTES, LINK_REKEY_DEFAULT_INTERVAL_SECS, OUTER_WIRE_FRAME_BYTES,
+    X25519_KEY_LEN,
+};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -54,6 +60,8 @@ pub struct RelayConfig {
     pub allow_loopback_for_test: bool,
     #[serde(default)]
     pub allowed_targets: Vec<String>,
+    #[serde(default = "default_max_concurrent_connections")]
+    pub max_concurrent_connections: usize,
     #[serde(default = "default_max_concurrent_circuits")]
     pub max_concurrent_circuits: usize,
     #[serde(default = "default_max_circuits_per_peer_ip")]
@@ -68,8 +76,15 @@ pub struct RelayConfig {
     pub destination_io_timeout_ms: u64,
     #[serde(default = "default_idle_circuit_ttl_secs")]
     pub idle_circuit_ttl_secs: u64,
+    #[serde(default = "default_link_rekey_interval_secs")]
+    pub link_rekey_interval_secs: u64,
+    #[serde(default = "default_link_rekey_bytes")]
+    pub link_rekey_bytes: u64,
 }
 
+const fn default_max_concurrent_connections() -> usize {
+    256
+}
 const fn default_max_concurrent_circuits() -> usize {
     1024
 }
@@ -91,6 +106,12 @@ const fn default_destination_io_timeout_ms() -> u64 {
 const fn default_idle_circuit_ttl_secs() -> u64 {
     120
 }
+const fn default_link_rekey_interval_secs() -> u64 {
+    LINK_REKEY_DEFAULT_INTERVAL_SECS
+}
+const fn default_link_rekey_bytes() -> u64 {
+    LINK_REKEY_DEFAULT_BYTES
+}
 
 impl RelayConfig {
     /// Creates an in-memory configuration for a relay using a caller-generated ephemeral keypair.
@@ -109,6 +130,7 @@ impl RelayConfig {
             allowed_next_peers: Vec::new(),
             allow_loopback_for_test: false,
             allowed_targets: Vec::new(),
+            max_concurrent_connections: default_max_concurrent_connections(),
             max_concurrent_circuits: default_max_concurrent_circuits(),
             max_circuits_per_peer_ip: default_max_circuits_per_peer_ip(),
             circuit_channel_capacity: default_channel_capacity(),
@@ -116,6 +138,15 @@ impl RelayConfig {
             io_timeout_ms: default_io_timeout_ms(),
             destination_io_timeout_ms: default_destination_io_timeout_ms(),
             idle_circuit_ttl_secs: default_idle_circuit_ttl_secs(),
+            link_rekey_interval_secs: default_link_rekey_interval_secs(),
+            link_rekey_bytes: default_link_rekey_bytes(),
+        }
+    }
+
+    pub fn link_rekey_policy(&self) -> LinkRekeyPolicy {
+        LinkRekeyPolicy {
+            max_bytes: self.link_rekey_bytes,
+            max_age: Duration::from_secs(self.link_rekey_interval_secs),
         }
     }
 
@@ -139,17 +170,190 @@ impl RelayConfig {
         if self.id.trim().is_empty() {
             return Err(NetworkError::Config("relay id must not be empty".into()));
         }
-        if self.listen_addr.trim().is_empty() {
-            return Err(NetworkError::Config("listen_addr must not be empty".into()));
-        }
-        let _ = self.keypair()?;
-        if self.max_concurrent_circuits == 0 || self.circuit_channel_capacity == 0 {
+        if self.listen_addr.parse::<SocketAddr>().is_err() {
             return Err(NetworkError::Config(
-                "circuit capacity limits must be non-zero".into(),
+                "listen_addr must be a valid ip:port SocketAddr".into(),
+            ));
+        }
+        let kp = self.keypair()?;
+        if self.max_concurrent_connections == 0
+            || self.max_concurrent_circuits == 0
+            || self.max_circuits_per_peer_ip == 0
+            || self.circuit_channel_capacity == 0
+        {
+            return Err(NetworkError::Config(
+                "connection and circuit capacity limits must be non-zero".into(),
+            ));
+        }
+        if self.handshake_timeout_ms < 50
+            || self.io_timeout_ms < 50
+            || self.destination_io_timeout_ms < 50
+            || self.idle_circuit_ttl_secs == 0
+        {
+            return Err(NetworkError::Config(
+                "timeouts must be >= 50ms and idle TTL must be >= 1s".into(),
+            ));
+        }
+        if self.link_rekey_interval_secs == 0
+            || self.link_rekey_bytes < OUTER_WIRE_FRAME_BYTES as u64
+        {
+            return Err(NetworkError::Config(
+                "link_rekey_interval_secs must be >= 1 and link_rekey_bytes >= 600".into(),
+            ));
+        }
+
+        let expected_next_role = match self.role {
+            RelayRole::Entry => Some(RelayRole::Middle),
+            RelayRole::Middle => Some(RelayRole::Exit),
+            RelayRole::Exit => None,
+        };
+        match expected_next_role {
+            None => {
+                if !self.allowed_next_peers.is_empty() {
+                    return Err(NetworkError::Config(
+                        "exit relay must not configure allowed_next_peers".into(),
+                    ));
+                }
+            }
+            Some(next_role) => {
+                for peer in &self.allowed_next_peers {
+                    validate_peer_descriptor(peer, next_role)?;
+                    if peer.public_key()? == *kp.public() {
+                        return Err(NetworkError::Config(
+                            "allowed_next_peers cannot reference relay's own key".into(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Complete typed startup configuration for `relay-client` (`configs/client.toml`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientConfigFile {
+    pub entry: PeerDescriptor,
+    pub middle: PeerDescriptor,
+    pub exit: PeerDescriptor,
+    #[serde(default = "default_handshake_timeout_ms")]
+    pub handshake_timeout_ms: u64,
+    #[serde(default = "default_io_timeout_ms")]
+    pub io_timeout_ms: u64,
+    #[serde(default = "default_request_timeout_ms")]
+    pub request_timeout_ms: u64,
+    #[serde(default = "default_link_rekey_interval_secs")]
+    pub link_rekey_interval_secs: u64,
+    #[serde(default = "default_link_rekey_bytes")]
+    pub link_rekey_bytes: u64,
+}
+
+const fn default_request_timeout_ms() -> u64 {
+    15_000
+}
+
+impl ClientConfigFile {
+    pub fn from_toml_str(s: &str) -> Result<Self, NetworkError> {
+        let cfg: Self = toml::from_str(s).map_err(|e| NetworkError::Config(e.to_string()))?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    pub fn to_toml_string(&self) -> Result<String, NetworkError> {
+        toml::to_string_pretty(self).map_err(|e| NetworkError::Config(e.to_string()))
+    }
+
+    pub fn link_rekey_policy(&self) -> LinkRekeyPolicy {
+        LinkRekeyPolicy {
+            max_bytes: self.link_rekey_bytes,
+            max_age: Duration::from_secs(self.link_rekey_interval_secs),
+        }
+    }
+
+    pub fn route(&self) -> [PeerDescriptor; 3] {
+        [self.entry.clone(), self.middle.clone(), self.exit.clone()]
+    }
+
+    pub fn validate(&self) -> Result<(), NetworkError> {
+        validate_peer_descriptor(&self.entry, RelayRole::Entry)?;
+        validate_peer_descriptor(&self.middle, RelayRole::Middle)?;
+        validate_peer_descriptor(&self.exit, RelayRole::Exit)?;
+
+        if self.entry.id == self.middle.id
+            || self.middle.id == self.exit.id
+            || self.entry.id == self.exit.id
+        {
+            return Err(NetworkError::Config(
+                "client route relay IDs must be distinct across Entry, Middle, and Exit".into(),
+            ));
+        }
+        let k_e = self.entry.public_key()?;
+        let k_m = self.middle.public_key()?;
+        let k_x = self.exit.public_key()?;
+        if k_e == k_m || k_m == k_x || k_e == k_x {
+            return Err(NetworkError::Config(
+                "client route public keys must be distinct across Entry, Middle, and Exit".into(),
+            ));
+        }
+        if self.entry.addr == self.middle.addr
+            || self.middle.addr == self.exit.addr
+            || self.entry.addr == self.exit.addr
+        {
+            return Err(NetworkError::Config(
+                "client route relay addresses must be distinct across hops".into(),
+            ));
+        }
+        if self.handshake_timeout_ms < 50 || self.io_timeout_ms < 50 || self.request_timeout_ms < 50
+        {
+            return Err(NetworkError::Config(
+                "client timeouts must be >= 50ms".into(),
+            ));
+        }
+        if self.link_rekey_interval_secs == 0
+            || self.link_rekey_bytes < OUTER_WIRE_FRAME_BYTES as u64
+        {
+            return Err(NetworkError::Config(
+                "link_rekey_interval_secs must be >= 1 and link_rekey_bytes >= 600".into(),
             ));
         }
         Ok(())
     }
+}
+
+fn validate_peer_descriptor(
+    peer: &PeerDescriptor,
+    expected_role: RelayRole,
+) -> Result<(), NetworkError> {
+    if peer.id.trim().is_empty() {
+        return Err(NetworkError::Config("peer id must not be empty".into()));
+    }
+    if peer.role != expected_role {
+        return Err(NetworkError::Config(format!(
+            "peer '{}' has inconsistent role {:?}, expected {:?}",
+            peer.id, peer.role, expected_role
+        )));
+    }
+    validate_host_port(&peer.addr)?;
+    let _ = peer.public_key()?;
+    Ok(())
+}
+
+fn validate_host_port(addr: &str) -> Result<(), NetworkError> {
+    if addr.is_empty() || addr.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(NetworkError::Config("peer addr malformed".into()));
+    }
+    let Some((host, port_str)) = addr.rsplit_once(':') else {
+        return Err(NetworkError::Config("peer addr must be host:port".into()));
+    };
+    let port: u16 = port_str
+        .parse()
+        .map_err(|_| NetworkError::Config("peer addr has invalid port".into()))?;
+    if host.is_empty() || port == 0 {
+        return Err(NetworkError::Config(
+            "peer addr must specify non-empty host and non-zero port".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Encodes arbitrary bytes into lowercase hex string without extra external dependencies.

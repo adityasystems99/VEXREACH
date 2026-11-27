@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use private_relay_crypto::{HopCipherPair, HopHandshakeResponder, StaticKeypair};
 use private_relay_network::{
-    accept_noise_link, connect_noise_link, DestinationPolicy, LinkReader, LinkWriter, NetworkError,
-    PeerDescriptor, RelayConfig, RelayRole,
+    accept_noise_link_with_rekey, connect_noise_link_with_rekey, DestinationPolicy, LinkReader,
+    LinkWriter, NetworkError, PeerDescriptor, RelayConfig, RelayRole,
 };
 use private_relay_protocol::{
     chunk_response, encode_error_payload, Cell, CircuitId, CircuitState, Command, DecodedRequest,
@@ -16,7 +16,7 @@ use private_relay_protocol::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex};
+use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use tracing::{debug, info, warn};
@@ -32,6 +32,7 @@ struct RelayRuntime {
     config: RelayConfig,
     keypair: StaticKeypair,
     dest_policy: DestinationPolicy,
+    conn_semaphore: Arc<Semaphore>,
     active_circuits: AtomicUsize,
     per_ip_circuits: Mutex<HashMap<IpAddr, usize>>,
     outbound_links: AsyncMutex<OutboundLinkMap>,
@@ -130,14 +131,19 @@ impl RelayRuntime {
             pool.remove(&key);
         }
 
-        let (reader, writer) =
-            connect_noise_link(addr, &self.keypair, expected_pub, self.handshake_timeout())
-                .await
-                .map_err(|err| match err {
-                    NetworkError::Timeout(_) => DestroyReason::HandshakeTimeout,
-                    NetworkError::Crypto(_) => DestroyReason::CryptoFail,
-                    _ => DestroyReason::PeerDisconnected,
-                })?;
+        let (reader, writer) = connect_noise_link_with_rekey(
+            addr,
+            &self.keypair,
+            expected_pub,
+            self.handshake_timeout(),
+            self.config.link_rekey_policy(),
+        )
+        .await
+        .map_err(|err| match err {
+            NetworkError::Timeout(_) => DestroyReason::HandshakeTimeout,
+            NetworkError::Crypto(_) => DestroyReason::CryptoFail,
+            _ => DestroyReason::PeerDisconnected,
+        })?;
 
         let handle = OutboundLinkHandle::spawn(Arc::clone(self), key.clone(), reader, writer);
         pool.insert(key, Arc::clone(&handle));
@@ -396,9 +402,10 @@ impl RelayServer {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let runtime = Arc::new(RelayRuntime {
-            config: effective_config,
+            config: effective_config.clone(),
             keypair,
             dest_policy,
+            conn_semaphore: Arc::new(Semaphore::new(effective_config.max_concurrent_connections)),
             active_circuits: AtomicUsize::new(0),
             per_ip_circuits: Mutex::new(HashMap::new()),
             outbound_links: AsyncMutex::new(HashMap::new()),
@@ -424,10 +431,22 @@ impl RelayServer {
                     accepted = listener.accept() => {
                         match accepted {
                             Ok((stream, peer_addr)) => {
-                                let rt_conn = Arc::clone(&rt_accept);
-                                tokio::spawn(async move {
-                                    handle_inbound_connection(rt_conn, stream, peer_addr).await;
-                                });
+                                match Arc::clone(&rt_accept.conn_semaphore).try_acquire_owned() {
+                                    Ok(permit) => {
+                                        let rt_conn = Arc::clone(&rt_accept);
+                                        tokio::spawn(async move {
+                                            handle_inbound_connection(rt_conn, stream, peer_addr, permit).await;
+                                        });
+                                    }
+                                    Err(_) => {
+                                        drop(stream);
+                                        warn!(
+                                            relay_id = %rt_accept.config.id,
+                                            role = ?rt_accept.config.role,
+                                            "inbound connection dropped due to max_concurrent_connections limit"
+                                        );
+                                    }
+                                }
                             }
                             Err(_) => {
                                 sleep(Duration::from_millis(20)).await;
@@ -457,20 +476,27 @@ async fn handle_inbound_connection(
     runtime: Arc<RelayRuntime>,
     stream: TcpStream,
     peer_addr: SocketAddr,
+    _conn_permit: OwnedSemaphorePermit,
 ) {
     let peer_ip = peer_addr.ip();
-    let (reader, writer, _remote_pub) =
-        match accept_noise_link(stream, &runtime.keypair, runtime.handshake_timeout()).await {
-            Ok(tuple) => tuple,
-            Err(_) => {
-                debug!(
-                    relay_id = %runtime.config.id,
-                    role = ?runtime.config.role,
-                    "inbound Noise handshake rejected"
-                );
-                return;
-            }
-        };
+    let (reader, writer, _remote_pub) = match accept_noise_link_with_rekey(
+        stream,
+        &runtime.keypair,
+        runtime.handshake_timeout(),
+        runtime.config.link_rekey_policy(),
+    )
+    .await
+    {
+        Ok(tuple) => tuple,
+        Err(_) => {
+            debug!(
+                relay_id = %runtime.config.id,
+                role = ?runtime.config.role,
+                "inbound Noise handshake rejected"
+            );
+            return;
+        }
+    };
 
     spawn_inbound_link_loop(runtime, reader, writer, peer_ip).await;
 }

@@ -15,7 +15,7 @@ pub use cell::{
 pub use circuit::{CircuitId, CircuitState};
 pub use constants::*;
 pub use error::ProtocolError;
-pub use frame::{decode_wire_record, encode_wire_record, OuterFramePlaintext};
+pub use frame::{decode_wire_record, encode_wire_record, LinkFrame, OuterFramePlaintext};
 pub use message::{
     chunk_request, chunk_response, encode_error_payload, DecodedRequest, InnerFlags, InnerPayload,
     MessageReassembler, ReassembledMessage,

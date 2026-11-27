@@ -253,3 +253,47 @@ async fn exit_enforces_ssrf_and_handles_direct_valid_request() {
 
     exit.shutdown().await;
 }
+
+#[tokio::test]
+async fn entry_enforces_max_concurrent_connections_limit() {
+    let entry_kp = StaticKeypair::generate().unwrap();
+    let mut entry_cfg = RelayConfig::with_generated_keypair(
+        "entry-conn-cap",
+        RelayRole::Entry,
+        "127.0.0.1:0",
+        &entry_kp,
+    );
+    entry_cfg.max_concurrent_connections = 1;
+    let entry = RelayServer::start(entry_cfg).await.unwrap();
+
+    // First client opens authenticated link and holds connection slot #1.
+    let c1_kp = StaticKeypair::generate().unwrap();
+    let (_r1, _w1) = connect_noise_link(
+        &entry.peer_descriptor().addr,
+        &c1_kp,
+        *entry_kp.public(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+
+    // Second concurrent TCP peer is dropped before Noise handshake due to max_concurrent_connections = 1.
+    let c2_kp = StaticKeypair::generate().unwrap();
+    let err = connect_noise_link(
+        &entry.peer_descriptor().addr,
+        &c2_kp,
+        *entry_kp.public(),
+        Duration::from_secs(2),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(matches!(
+        err,
+        private_relay_network::NetworkError::ConnectionClosed
+            | private_relay_network::NetworkError::Timeout(_)
+            | private_relay_network::NetworkError::Io(_)
+    ));
+
+    entry.shutdown().await;
+}

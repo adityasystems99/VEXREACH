@@ -6,12 +6,12 @@
 
 | Capability | Category | Status | Target Phase |
 | :--- | :--- | :--- | :--- |
-| Binary cell framing (`600B` total wire frames / `582B` plaintext) | Implemented Prototype (`Day 1`) | **Implemented & Tested (`10/10` tests passing)** | Day 1 (`Complete`) |
-| `Noise_IK` link channel + `Noise_NK` telescopic hop exchange | Established Tech + Hybrid Composition | **Implemented & Tested (`Day 2`, `4/4` crypto + `3/3` network tests)** | Day 2 (`Complete`) |
-| Per-hop `ChaCha20-Poly1305` + `u64` replay sequence enforcement | Established Tech | **Implemented & Tested (`Day 2`, `4/4` crypto tests)** | Day 2 (`Complete`) |
-| Single Rust relay (`CircuitTable`, bounded queues, SSRF check) | Proposed Implementation | **Implemented & Tested (`Day 2`, `4/4` relay tests)** | Day 2 (`Complete`) |
-| Local 3-hop forwarding (`Client → Entry → Middle → Exit → Dest`) | Proposed Implementation | **Implemented & Tested (`Day 2`, `8/8` E2E tests)** | Day 2 (`Complete`) |
-| Response routing back along circuit | Proposed Implementation | **Implemented & Tested (`Day 2`, `8/8` E2E tests)** | Day 2 (`Complete`) |
+| Binary cell framing (`600B` total wire frames / `582B` plaintext) | Implemented Prototype (`Day 1`) | **Implemented & Tested (`10/10` protocol tests)** | Day 1 (`Complete`) |
+| `Noise_IK` link channel + coordinated link rekeying (`3600s` / `1 GiB`) | Established Tech (`snow v0.9.6`) + `D-09` | **Implemented & Tested (`Day 3`, `6/6` crypto + `5/5` net tests)** | Day 3 (`Complete`) |
+| `Noise_NK` telescopic hops + per-hop `ChaCha20-Poly1305` + `u64` replay | Established Tech + `D-07`/`D-08` | **Implemented & Tested (`Day 2`, `6/6` crypto tests)** | Day 2 (`Complete`) |
+| Single Rust relay (`CircuitTable`, conn semaphore, bounded queues, SSRF) | Implemented Prototype (`Day 2–3`) | **Implemented & Tested (`5/5` relay tests)** | Day 3 (`Complete`) |
+| Standalone CLI binaries + 5-process Windows local demo (`demo/`) | Implemented Prototype (`Day 3`) | **Implemented & Tested (`3/3` CLI tests + `10/10` PS demo cases)** | Day 3 (`Complete`) |
+| Multi-hop request & response routing (`Client → Entry → Middle → Exit → Dest`) | Implemented Prototype (`Day 2–3`) | **Implemented & Tested (`10/10` client E2E + `3/3` CLI tests)** | Day 3 (`Complete`) |
 | Coordinator registry, operator diversity & failover | Proposed / Deferred | **Planned** | Phase 5 |
 | Privacy-preserving Prometheus aggregate metrics | Proposed / Deferred | **Planned** | Phase 6 |
 | Adversarial crypto, SSRF & DoS test harness | Proposed / Deferred | **Planned** | Phase 7 |
@@ -45,10 +45,10 @@
 
 ## 3. Sequential Milestones
 
-- **Phase 1 — Architecture & Technical Specification (Complete in Current Step):** `PROTOCOL_SPEC.md`, `THREAT_MODEL.md`, `ARCHITECTURE.md`, `docs/TECH_DECISIONS.md`, `ROADMAP.md`, `README.md`.
-- **Phase 2 — `protocol/` & `crypto/` Crates:** Define wire framing codecs, `Noise_IK`/`Noise_NK` wrappers (`snow`), HKDF key separation, strict monotonic AEAD ciphers, and adversarial crypto unit tests (`cargo test`).
-- **Phase 3 — `relay/` Single-Hop Engine:** Build async Tokio relay supporting `Entry`/`Middle`/`Exit` config, `CircuitTable`, bounded channels, SSRF policy, and failure cleanup.
-- **Phase 4 — `client/` & Multi-Hop End-to-End Integration:** Run `Client → Entry → Middle → Exit → Local Dest` locally on separate Windows ports with full automated E2E tests.
+- **Phase 1 — Architecture & Technical Specification (Complete):** `PROTOCOL_SPEC.md`, `THREAT_MODEL.md`, `ARCHITECTURE.md`, `docs/TECH_DECISIONS.md`, `ROADMAP.md`, `README.md`.
+- **Phase 2 — `protocol/` & `crypto/` Crates (Complete):** Wire framing codecs, `Noise_IK`/`Noise_NK` (`snow`), coordinated link rekeying (`D-09`), `HKDF-SHA256` key separation (`D-08`), monotonic `ChaCha20-Poly1305`, and crypto tests.
+- **Phase 3 — `relay/` Engine & `network/` Transport (Complete):** Async Tokio parameterized `Entry`/`Middle`/`Exit` relay, `CircuitTable`, bounded channels, connection cap, hardened Exit SSRF policy, and failure cleanup.
+- **Phase 4 — `client/`, `cli/` & 5-Process Local Integration (Complete for `v0.1`):** Standalone `relay-entry`, `relay-middle`, `relay-exit`, `relay-client`, `demo-dest`, and `relay-keygen` binaries + PowerShell multi-process Windows demo + internal security review (`SECURITY_REVIEW.md`).
 - **Phase 5 — `coordinator/` Discovery & Recovery:** Axum directory API, signed descriptors, operator diversity checks, and circuit failover.
 - **Phase 6 — Observability:** Aggregate Prometheus counters (strictly verified PII-free).
 - **Phase 7 — Adversarial Security & Benchmark Suite:** Replay, tagging, slowloris backpressure, SSRF, DNS-leak probes, and latency/throughput benchmarks.
@@ -61,19 +61,23 @@
 
 ```text
 private-relay/
-├── Cargo.toml             # Added in Phase 2 once crates exist
+├── Cargo.toml             # 6-crate Cargo workspace (`v0.1`)
 ├── README.md
 ├── PROTOCOL_SPEC.md
 ├── THREAT_MODEL.md
 ├── ARCHITECTURE.md
+├── SECURITY_DESIGN.md
+├── SECURITY_REVIEW.md     # Day 3 focused 16-point internal security review
 ├── ROADMAP.md
+├── demo/                  # Day 3 multi-process PowerShell scripts & config templates
 ├── docs/
 │   └── TECH_DECISIONS.md
-├── crates/
-│   ├── protocol/          # Phase 2: stateless wire cells & serialization
-│   ├── crypto/            # Phase 2: Noise_IK / Noise_NK + ChaCha20-Poly1305 + zeroize
-│   ├── relay/             # Phase 3: async Entry / Middle / Exit server
-│   ├── client/            # Phase 4: telescopic circuit builder & request client
-│   └── coordinator/       # Phase 5: signed relay directory (added only in Phase 5)
-└── tests/                 # Phase 4 & 7: multi-hop E2E & adversarial tests
+└── crates/
+    ├── protocol/          # Stateless wire cells, framing & chunking
+    ├── crypto/            # Noise_IK / Noise_NK + link rekeying + ChaCha20-Poly1305 + zeroize
+    ├── network/           # Config validation, SSRF policy & async Noise TCP links
+    ├── relay/             # Async parameterized Entry / Middle / Exit server
+    ├── client/            # Telescopic 3-hop client & E2E integration tests
+    ├── cli/               # Standalone binaries (`relay-*`, `demo-dest`, `relay-keygen`)
+    └── coordinator/       # Phase 5 (Deferred — not created in v0.1)
 ```

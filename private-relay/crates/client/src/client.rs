@@ -1,8 +1,11 @@
 use std::time::Duration;
 
-use private_relay_crypto::{ClientCircuitCrypto, HopHandshakeInitiator, StaticKeypair};
+use private_relay_crypto::{
+    ClientCircuitCrypto, HopHandshakeInitiator, LinkRekeyPolicy, StaticKeypair,
+};
 use private_relay_network::{
-    connect_noise_link, LinkReader, LinkWriter, PeerDescriptor, RelayRole,
+    connect_noise_link_with_rekey, ClientConfigFile, LinkReader, LinkWriter, PeerDescriptor,
+    RelayRole,
 };
 use private_relay_protocol::{
     chunk_request, Cell, CircuitId, CircuitState, Command, DestroyReason, ExtendDirective,
@@ -34,6 +37,16 @@ impl Default for ClientConfig {
     }
 }
 
+impl ClientConfig {
+    pub fn from_config_file(file: &ClientConfigFile) -> Self {
+        Self {
+            handshake_timeout: Duration::from_millis(file.handshake_timeout_ms),
+            io_timeout: Duration::from_millis(file.io_timeout_ms),
+            request_timeout: Duration::from_millis(file.request_timeout_ms),
+        }
+    }
+}
+
 /// Entrypoint for establishing authenticated 3-hop Private-Relay circuits.
 pub struct RelayClient;
 
@@ -42,6 +55,7 @@ pub struct ClientCircuit {
     cid: CircuitId,
     state: CircuitState,
     next_request_id: u32,
+    last_request_id: Option<RequestId>,
     crypto: ClientCircuitCrypto,
     reader: LinkReader<ReadHalf<TcpStream>>,
     writer: LinkWriter<WriteHalf<TcpStream>>,
@@ -55,6 +69,15 @@ impl RelayClient {
     pub async fn connect_three_hop(
         route: [PeerDescriptor; 3],
         config: ClientConfig,
+    ) -> Result<ClientCircuit, ClientError> {
+        Self::connect_three_hop_with_rekey(route, config, LinkRekeyPolicy::default()).await
+    }
+
+    /// Connects a 3-hop circuit configuring an explicit [`LinkRekeyPolicy`] on the Client->Entry link.
+    pub async fn connect_three_hop_with_rekey(
+        route: [PeerDescriptor; 3],
+        config: ClientConfig,
+        rekey_policy: LinkRekeyPolicy,
     ) -> Result<ClientCircuit, ClientError> {
         if route[0].role != RelayRole::Entry
             || route[1].role != RelayRole::Middle
@@ -70,11 +93,12 @@ impl RelayClient {
         let exit_pub = route[2].public_key()?;
 
         let client_ephemeral = StaticKeypair::generate()?;
-        let (mut reader, mut writer) = connect_noise_link(
+        let (mut reader, mut writer) = connect_noise_link_with_rekey(
             &route[0].addr,
             &client_ephemeral,
             entry_pub,
             config.handshake_timeout,
+            rekey_policy,
         )
         .await?;
 
@@ -175,6 +199,7 @@ impl RelayClient {
             cid,
             state,
             next_request_id: 1,
+            last_request_id: None,
             crypto,
             reader,
             writer,
@@ -192,6 +217,18 @@ impl ClientCircuit {
         self.state
     }
 
+    pub fn last_request_id(&self) -> Option<RequestId> {
+        self.last_request_id
+    }
+
+    pub fn link_rekey_epochs(&self) -> Result<(u64, u64), ClientError> {
+        Ok(self.writer.rekey_epochs()?)
+    }
+
+    pub async fn trigger_link_rekey(&mut self) -> Result<(), ClientError> {
+        Ok(self.writer.trigger_rekey(self.config.io_timeout).await?)
+    }
+
     /// Sends a bounded (`<= 64 KiB`) request through all 3 relays to `target_host_port` (`host:port`)
     /// and returns the bounded (`<= 64 KiB`) response bytes.
     pub async fn send_request(
@@ -205,6 +242,7 @@ impl ClientCircuit {
 
         let raw_rid = self.next_request_id;
         let rid = RequestId::new(raw_rid)?;
+        self.last_request_id = Some(rid);
         self.next_request_id = raw_rid
             .checked_add(1)
             .ok_or(ClientError::InvalidState("request ID space exhausted"))?;

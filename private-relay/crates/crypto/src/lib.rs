@@ -11,4 +11,4 @@ pub use hop::{
     HopHandshakeResponder,
 };
 pub use keys::{parse_public_key, StaticKeypair};
-pub use link::{LinkInitiator, LinkResponder, LinkSession};
+pub use link::{LinkInitiator, LinkRekeyPolicy, LinkResponder, LinkSession};

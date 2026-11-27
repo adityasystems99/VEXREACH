@@ -1,9 +1,19 @@
 use crate::cell::Cell;
 use crate::constants::{
-    CELL_HEADER_LEN, MAX_CELL_BYTES, OUTER_CIPHERTEXT_LEN, OUTER_PLAINTEXT_LEN,
-    OUTER_REAL_LEN_PREFIX_LEN, OUTER_WIRE_FRAME_BYTES, TCP_LENGTH_PREFIX_LEN,
+    CELL_HEADER_LEN, LINK_REKEY_MAGIC, LINK_REKEY_MARKER, MAX_CELL_BYTES, OUTER_CIPHERTEXT_LEN,
+    OUTER_PLAINTEXT_LEN, OUTER_REAL_LEN_PREFIX_LEN, OUTER_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    TCP_LENGTH_PREFIX_LEN,
 };
 use crate::error::ProtocolError;
+
+const LINK_REKEY_CONTROL_HEADER_LEN: usize = 2 + 8 + 1 + 8;
+
+/// Decoded outer Noise plaintext frame: either a normal overlay [`Cell`] or an internal link rekey control signal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkFrame {
+    Cell(Cell),
+    RekeyControl { epoch: u64 },
+}
 
 /// Reconciled `582`-byte outer Noise link plaintext buffer (`Approved Decision D-02`).
 ///
@@ -65,6 +75,65 @@ impl OuterFramePlaintext {
             });
         }
         Cell::decode(&plaintext[OUTER_REAL_LEN_PREFIX_LEN..OUTER_REAL_LEN_PREFIX_LEN + real_len])
+    }
+
+    /// Packs a `582`-byte encrypted Noise link rekey control frame (`0xFFFF || b"PR_REKEY" || version || epoch || padding`).
+    pub fn pack_rekey_control(epoch: u64, random_padding: &[u8]) -> Result<Self, ProtocolError> {
+        if epoch == 0 {
+            return Err(ProtocolError::MalformedPayload(
+                "link rekey epoch must be non-zero",
+            ));
+        }
+        let needed_pad = OUTER_PLAINTEXT_LEN - LINK_REKEY_CONTROL_HEADER_LEN;
+        if random_padding.len() < needed_pad {
+            return Err(ProtocolError::InsufficientPadding {
+                needed: needed_pad,
+                provided: random_padding.len(),
+            });
+        }
+
+        let mut bytes = [0u8; OUTER_PLAINTEXT_LEN];
+        bytes[0..2].copy_from_slice(&LINK_REKEY_MARKER.to_be_bytes());
+        bytes[2..10].copy_from_slice(LINK_REKEY_MAGIC);
+        bytes[10] = PROTOCOL_VERSION;
+        bytes[11..19].copy_from_slice(&epoch.to_be_bytes());
+        bytes[LINK_REKEY_CONTROL_HEADER_LEN..].copy_from_slice(&random_padding[..needed_pad]);
+        Ok(Self { bytes })
+    }
+
+    /// Decodes a decrypted `582`-byte outer Noise link frame into either a [`Cell`] or a validated [`LinkFrame::RekeyControl`].
+    pub fn unpack_link_frame(plaintext: &[u8]) -> Result<LinkFrame, ProtocolError> {
+        if plaintext.len() != OUTER_PLAINTEXT_LEN {
+            return Err(ProtocolError::InvalidOuterPlaintextLength {
+                expected: OUTER_PLAINTEXT_LEN,
+                actual: plaintext.len(),
+            });
+        }
+
+        let marker = u16::from_be_bytes([plaintext[0], plaintext[1]]);
+        if marker == LINK_REKEY_MARKER {
+            if &plaintext[2..10] != LINK_REKEY_MAGIC {
+                return Err(ProtocolError::MalformedPayload(
+                    "invalid link rekey control magic",
+                ));
+            }
+            if plaintext[10] != PROTOCOL_VERSION {
+                return Err(ProtocolError::UnsupportedVersion(plaintext[10]));
+            }
+            let epoch = u64::from_be_bytes(
+                plaintext[11..19]
+                    .try_into()
+                    .map_err(|_| ProtocolError::MalformedPayload("truncated rekey epoch"))?,
+            );
+            if epoch == 0 {
+                return Err(ProtocolError::MalformedPayload(
+                    "link rekey epoch must be non-zero",
+                ));
+            }
+            return Ok(LinkFrame::RekeyControl { epoch });
+        }
+
+        Self::unpack(plaintext).map(LinkFrame::Cell)
     }
 }
 

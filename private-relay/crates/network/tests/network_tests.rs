@@ -3,10 +3,11 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use private_relay_crypto::{LinkInitiator, LinkResponder, StaticKeypair};
+use private_relay_crypto::{LinkInitiator, LinkRekeyPolicy, LinkResponder, StaticKeypair};
 use private_relay_network::{
-    accept_noise_link, connect_noise_link, split_framed_session, DestinationPolicy, NetworkError,
-    RelayConfig, RelayRole,
+    accept_noise_link, accept_noise_link_with_rekey, connect_noise_link,
+    connect_noise_link_with_rekey, split_framed_session, ClientConfigFile, DestinationPolicy,
+    NetworkError, PeerDescriptor, RelayConfig, RelayRole,
 };
 use private_relay_protocol::{Cell, CircuitId, Command, ProtocolError, OUTER_WIRE_FRAME_BYTES};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -248,4 +249,228 @@ async fn tcp_link_rejects_bad_prefix_truncated_eof_and_bad_auth() {
     let parsed = RelayConfig::from_toml_str(&toml_str).unwrap();
     assert_eq!(parsed.id, "entry-1");
     assert_eq!(parsed.role, RelayRole::Entry);
+}
+
+#[tokio::test]
+async fn tcp_link_rekey_byte_limit_simultaneous_and_interrupted_failure() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let kp_srv = StaticKeypair::generate().unwrap();
+    let kp_cli = StaticKeypair::generate().unwrap();
+
+    // Byte threshold = 1200B (triggers automatic rekey before every 3rd outgoing cell).
+    let policy = LinkRekeyPolicy {
+        max_bytes: 1200,
+        max_age: Duration::from_secs(3600),
+    };
+
+    let srv_kp = kp_srv.clone();
+    let srv_task = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (mut r, mut w, _) =
+            accept_noise_link_with_rekey(stream, &srv_kp, Duration::from_secs(2), policy)
+                .await
+                .unwrap();
+
+        for i in 1..=6u32 {
+            let c = r.recv_cell(Duration::from_secs(2)).await.unwrap();
+            assert_eq!(c.circuit_id.get(), i);
+        }
+        assert_eq!(r.rekey_epochs().unwrap().1, 2);
+
+        // Explicit trigger on server writer + reply frame back to client.
+        w.trigger_rekey(Duration::from_secs(2)).await.unwrap();
+        w.send_cell(
+            &Cell::new(
+                CircuitId::new(99).unwrap(),
+                Command::RelayData,
+                0,
+                vec![5; 8],
+            )
+            .unwrap(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        assert_eq!(w.rekey_epochs().unwrap().0, 1);
+        (r, w)
+    });
+
+    let (mut cr, mut cw) = connect_noise_link_with_rekey(
+        &addr.to_string(),
+        &kp_cli,
+        *kp_srv.public(),
+        Duration::from_secs(2),
+        policy,
+    )
+    .await
+    .unwrap();
+
+    for i in 1..=6u32 {
+        let cell = Cell::new(CircuitId::new(i).unwrap(), Command::Create, 0, vec![2; 12]).unwrap();
+        cw.send_cell(&cell, Duration::from_secs(2)).await.unwrap();
+    }
+    assert_eq!(cw.rekey_epochs().unwrap().0, 2);
+
+    let reply = cr.recv_cell(Duration::from_secs(2)).await.unwrap();
+    assert_eq!(reply.circuit_id.get(), 99);
+    assert_eq!(cr.rekey_epochs().unwrap(), (2, 1));
+
+    let (mut sr, mut sw) = srv_task.await.unwrap();
+
+    // Test consecutive empty rekey flood (> 4 without intervening Cell) fails closed.
+    let cli_flood = tokio::spawn(async move {
+        for _ in 0..5 {
+            if cw.trigger_rekey(Duration::from_secs(2)).await.is_err() {
+                break;
+            }
+        }
+        cw
+    });
+    let err = sr.recv_cell(Duration::from_secs(2)).await.unwrap_err();
+    assert!(matches!(err, NetworkError::Protocol(_)));
+    let _cw = cli_flood.await.unwrap();
+    let _ = sw.shutdown().await;
+    drop(cr);
+
+    // Interrupted rekey mid-frame over TCP fails closed on EOF.
+    let l2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr2 = l2.local_addr().unwrap();
+    let kp_srv2 = kp_srv.clone();
+    let recv_task2 = tokio::spawn(async move {
+        let (stream, _) = l2.accept().await.unwrap();
+        let (mut r, _w, _) = accept_noise_link(stream, &kp_srv2, Duration::from_secs(2))
+            .await
+            .unwrap();
+        r.recv_cell(Duration::from_secs(2)).await
+    });
+    let s2 = TcpStream::connect(addr2).await.unwrap();
+    let (mut r2, mut w2) = tokio::io::split(s2);
+    let mut sess = private_relay_network::transport::run_initiator_handshake(
+        &mut r2,
+        &mut w2,
+        &kp_cli,
+        *kp_srv.public(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    let rk_wire = sess.seal_rekey_and_rotate().unwrap();
+    // Send half a rekey frame and drop socket abruptly.
+    w2.write_all(&rk_wire[..250]).await.unwrap();
+    w2.shutdown().await.unwrap();
+    let interr = recv_task2.await.unwrap().err().unwrap();
+    assert!(matches!(interr, NetworkError::ConnectionClosed));
+}
+
+#[test]
+fn config_rejects_invalid_roles_mismatched_keys_loop_and_bounds() {
+    let kp_entry = StaticKeypair::generate().unwrap();
+    let kp_mid = StaticKeypair::generate().unwrap();
+    let kp_exit = StaticKeypair::generate().unwrap();
+
+    // 1. Mismatched private/public keypair rejected.
+    let mut bad_kp_cfg =
+        RelayConfig::with_generated_keypair("e1", RelayRole::Entry, "127.0.0.1:9101", &kp_entry);
+    bad_kp_cfg.public_key_hex = private_relay_network::encode_hex(kp_mid.public());
+    assert!(matches!(
+        bad_kp_cfg.validate(),
+        Err(NetworkError::Crypto(_))
+    ));
+
+    // 2. Invalid listen_addr rejected.
+    let mut bad_addr_cfg =
+        RelayConfig::with_generated_keypair("e1", RelayRole::Entry, "not-an-ip:9101", &kp_entry);
+    assert!(matches!(
+        bad_addr_cfg.validate(),
+        Err(NetworkError::Config(_))
+    ));
+    bad_addr_cfg.listen_addr = "127.0.0.1:9101".into();
+
+    // 3. Exit with allowed_next_peers rejected.
+    let mut bad_exit_cfg =
+        RelayConfig::with_generated_keypair("x1", RelayRole::Exit, "127.0.0.1:9103", &kp_exit);
+    bad_exit_cfg.allowed_next_peers = vec![PeerDescriptor {
+        id: "m1".into(),
+        role: RelayRole::Middle,
+        addr: "127.0.0.1:9102".into(),
+        public_key_hex: private_relay_network::encode_hex(kp_mid.public()),
+    }];
+    assert!(matches!(
+        bad_exit_cfg.validate(),
+        Err(NetworkError::Config(_))
+    ));
+
+    // 4. Entry referencing Exit directly or self key rejected.
+    let mut bad_hop_cfg =
+        RelayConfig::with_generated_keypair("e1", RelayRole::Entry, "127.0.0.1:9101", &kp_entry);
+    bad_hop_cfg.allowed_next_peers = vec![PeerDescriptor {
+        id: "x1".into(),
+        role: RelayRole::Exit,
+        addr: "127.0.0.1:9103".into(),
+        public_key_hex: private_relay_network::encode_hex(kp_exit.public()),
+    }];
+    assert!(matches!(
+        bad_hop_cfg.validate(),
+        Err(NetworkError::Config(_))
+    ));
+
+    bad_hop_cfg.allowed_next_peers = vec![PeerDescriptor {
+        id: "self-loop".into(),
+        role: RelayRole::Middle,
+        addr: "127.0.0.1:9101".into(),
+        public_key_hex: private_relay_network::encode_hex(kp_entry.public()),
+    }];
+    assert!(matches!(
+        bad_hop_cfg.validate(),
+        Err(NetworkError::Config(_))
+    ));
+
+    // 5. Invalid link_rekey_bytes (< 600) or zero connection limit rejected.
+    let mut bad_bounds_cfg =
+        RelayConfig::with_generated_keypair("e1", RelayRole::Entry, "127.0.0.1:9101", &kp_entry);
+    bad_bounds_cfg.link_rekey_bytes = 599;
+    assert!(matches!(
+        bad_bounds_cfg.validate(),
+        Err(NetworkError::Config(_))
+    ));
+    bad_bounds_cfg.link_rekey_bytes = 600;
+    bad_bounds_cfg.max_concurrent_connections = 0;
+    assert!(matches!(
+        bad_bounds_cfg.validate(),
+        Err(NetworkError::Config(_))
+    ));
+
+    // 6. ClientConfigFile rejects role mismatch or duplicate hop keys.
+    let mut ccfg = ClientConfigFile {
+        entry: PeerDescriptor {
+            id: "e1".into(),
+            role: RelayRole::Entry,
+            addr: "127.0.0.1:9101".into(),
+            public_key_hex: private_relay_network::encode_hex(kp_entry.public()),
+        },
+        middle: PeerDescriptor {
+            id: "m1".into(),
+            role: RelayRole::Middle,
+            addr: "127.0.0.1:9102".into(),
+            public_key_hex: private_relay_network::encode_hex(kp_mid.public()),
+        },
+        exit: PeerDescriptor {
+            id: "x1".into(),
+            role: RelayRole::Exit,
+            addr: "127.0.0.1:9103".into(),
+            public_key_hex: private_relay_network::encode_hex(kp_exit.public()),
+        },
+        handshake_timeout_ms: 5000,
+        io_timeout_ms: 5000,
+        request_timeout_ms: 10000,
+        link_rekey_interval_secs: 3600,
+        link_rekey_bytes: 1_073_741_824,
+    };
+    assert!(ccfg.validate().is_ok());
+    ccfg.middle.role = RelayRole::Exit;
+    assert!(ccfg.validate().is_err());
+    ccfg.middle.role = RelayRole::Middle;
+    ccfg.exit.public_key_hex = ccfg.entry.public_key_hex.clone();
+    assert!(ccfg.validate().is_err());
 }

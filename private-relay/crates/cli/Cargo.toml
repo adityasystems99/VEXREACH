@@ -1,0 +1,42 @@
+[package]
+name = "private-relay-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Standalone CLI executables for Entry, Middle, Exit relays, 3-hop client, and local demo server"
+
+[[bin]]
+name = "relay-entry"
+path = "src/bin/relay-entry.rs"
+
+[[bin]]
+name = "relay-middle"
+path = "src/bin/relay-middle.rs"
+
+[[bin]]
+name = "relay-exit"
+path = "src/bin/relay-exit.rs"
+
+[[bin]]
+name = "relay-client"
+path = "src/bin/relay-client.rs"
+
+[[bin]]
+name = "demo-dest"
+path = "src/bin/demo-dest.rs"
+
+[[bin]]
+name = "relay-keygen"
+path = "src/bin/relay-keygen.rs"
+
+[dependencies]
+private-relay-protocol = { workspace = true }
+private-relay-crypto = { workspace = true }
+private-relay-network = { workspace = true }
+private-relay-relay = { workspace = true }
+private-relay-client = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }

@@ -75,6 +75,18 @@ pub const MAX_CIRCUIT_SEQ: u64 = 1u64 << 32;
 /// Fixed 15-byte AAD length (`4B "PRv1" + 1B version + 1B dir + 1B hop_index + 8B seq`).
 pub const HOP_AEAD_AAD_LEN: usize = 15;
 
+/// Default periodic Noise link rekey time threshold (`3600s` = 1 hour).
+pub const LINK_REKEY_DEFAULT_INTERVAL_SECS: u64 = 3600;
+
+/// Default Noise link rekey byte threshold (`1 GiB`).
+pub const LINK_REKEY_DEFAULT_BYTES: u64 = 1_073_741_824;
+
+/// Reserved outer plaintext prefix marker identifying an in-band Noise link control frame.
+pub const LINK_REKEY_MARKER: u16 = 0xFFFF;
+
+/// Canonical 8-byte magic header inside encrypted link rekey control frames.
+pub const LINK_REKEY_MAGIC: &[u8; 8] = b"PR_REKEY";
+
 // Compile-time verification of reconciled frame and chunk invariants.
 const _: () = {
     assert!(TCP_LENGTH_PREFIX_LEN + OUTER_CIPHERTEXT_LEN == OUTER_WIRE_FRAME_BYTES);

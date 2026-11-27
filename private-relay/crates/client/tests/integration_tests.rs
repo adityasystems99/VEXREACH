@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use private_relay_client::{ClientConfig, ClientError, RelayClient};
-use private_relay_crypto::{HopHandshakeInitiator, StaticKeypair};
+use private_relay_crypto::{HopHandshakeInitiator, LinkRekeyPolicy, StaticKeypair};
 use private_relay_network::{connect_noise_link, PeerDescriptor, RelayConfig, RelayRole};
 use private_relay_protocol::{
     Cell, CircuitId, CircuitState, Command, DestroyReason, RequestErrorCode, MAX_MESSAGE_BYTES,
@@ -541,4 +541,97 @@ async fn tracing_logs_never_contain_ips_destinations_keys_or_payloads() {
         !captured.contains("CANARY_SECRET_USER_DATA_999"),
         "Payload leaked in logs: {captured}"
     );
+}
+
+#[tokio::test]
+async fn e2e_three_hop_survives_automatic_link_rekeys() {
+    // Configure aggressive 1200-byte rekey threshold on all 3 relays and Client->Entry link.
+    let exit_kp = StaticKeypair::generate().unwrap();
+    let mut exit_cfg =
+        RelayConfig::with_generated_keypair("exit-rk", RelayRole::Exit, "127.0.0.1:0", &exit_kp);
+    exit_cfg.allow_loopback_for_test = true;
+    exit_cfg.link_rekey_bytes = 1200;
+    let exit = RelayServer::start(exit_cfg).await.unwrap();
+
+    let mid_kp = StaticKeypair::generate().unwrap();
+    let mut mid_cfg =
+        RelayConfig::with_generated_keypair("mid-rk", RelayRole::Middle, "127.0.0.1:0", &mid_kp);
+    mid_cfg.allowed_next_peers = vec![exit.peer_descriptor().clone()];
+    mid_cfg.link_rekey_bytes = 1200;
+    let middle = RelayServer::start(mid_cfg).await.unwrap();
+
+    let entry_kp = StaticKeypair::generate().unwrap();
+    let mut entry_cfg =
+        RelayConfig::with_generated_keypair("entry-rk", RelayRole::Entry, "127.0.0.1:0", &entry_kp);
+    entry_cfg.allowed_next_peers = vec![middle.peer_descriptor().clone()];
+    entry_cfg.link_rekey_bytes = 1200;
+    let entry = RelayServer::start(entry_cfg).await.unwrap();
+
+    let dest = spawn_echo_destination().await;
+    let route = [
+        entry.peer_descriptor().clone(),
+        middle.peer_descriptor().clone(),
+        exit.peer_descriptor().clone(),
+    ];
+    let rekey_policy = LinkRekeyPolicy {
+        max_bytes: 1200,
+        max_age: Duration::from_secs(3600),
+    };
+
+    let mut circuit =
+        RelayClient::connect_three_hop_with_rekey(route, ClientConfig::default(), rekey_policy)
+            .await
+            .unwrap();
+
+    let payload: Vec<u8> = (0..8192).map(|i| (i % 251) as u8).collect();
+    let resp = circuit.send_request(&dest, &payload).await.unwrap();
+    let expected: Vec<u8> = payload.iter().map(|b| b ^ 0x5A).collect();
+    assert_eq!(resp, expected);
+
+    // Confirm multiple synchronized automatic Noise link rekeys occurred in BOTH directions.
+    let (out_epoch, in_epoch) = circuit.link_rekey_epochs().unwrap();
+    assert!(
+        out_epoch >= 5,
+        "expected outgoing link rekeys, got {out_epoch}"
+    );
+    assert!(
+        in_epoch >= 5,
+        "expected incoming link rekeys, got {in_epoch}"
+    );
+
+    circuit.close().await.unwrap();
+    entry.shutdown().await;
+    middle.shutdown().await;
+    exit.shutdown().await;
+}
+
+#[tokio::test]
+async fn e2e_redirect_response_is_not_followed_to_ssrf_target() {
+    let net = TestNetwork::start(true, 5_000).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dest = listener.local_addr().unwrap().to_string();
+    tokio::spawn(async move {
+        if let Ok((mut s, _)) = listener.accept().await {
+            let mut req = Vec::new();
+            let _ = s.read_to_end(&mut req).await;
+            let _ = s
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/latest/meta-data/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+            let _ = s.shutdown().await;
+        }
+    });
+
+    let mut circuit = RelayClient::connect_three_hop(net.route(), ClientConfig::default())
+        .await
+        .unwrap();
+    let raw = circuit
+        .send_request(&dest, b"GET /redirect HTTP/1.1\r\nHost: x\r\n\r\n")
+        .await
+        .unwrap();
+    assert!(raw.starts_with(b"HTTP/1.1 302 Found"));
+
+    circuit.close().await.unwrap();
+    net.shutdown().await;
 }

@@ -1,0 +1,21 @@
+# TEMPLATE ONLY - NEVER COMMIT LIVE OR DEMO PRIVATE KEYS
+# Generated at runtime into `demo/generated/exit.toml` via `relay-keygen`.
+
+id = "demo-exit-1"
+role = "exit"
+listen_addr = "127.0.0.1:9103"
+public_key_hex = "<GENERATED_64_HEX_PUBLIC_KEY>"
+private_key_hex = "<GENERATED_64_HEX_PRIVATE_KEY>"
+# Explicit controlled loopback opt-in strictly for local demo testing (`127.0.0.1:9000` only).
+allow_loopback_for_test = true
+allowed_targets = ["127.0.0.1:9000"]
+max_concurrent_connections = 256
+max_concurrent_circuits = 1024
+max_circuits_per_peer_ip = 16
+circuit_channel_capacity = 64
+handshake_timeout_ms = 5000
+io_timeout_ms = 5000
+destination_io_timeout_ms = 5000
+idle_circuit_ttl_secs = 120
+link_rekey_interval_secs = 3600
+link_rekey_bytes = 1073741824
