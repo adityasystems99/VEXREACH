@@ -344,6 +344,10 @@ impl LinkSession {
         if self.failed {
             return Err(CryptoError::InvalidState("link session failed closed"));
         }
+        if self.transport.receiving_nonce() >= MAX_LINK_NOISE_NONCE {
+            self.failed = true;
+            return Err(CryptoError::SequenceExhausted);
+        }
         let ciphertext = decode_wire_record(wire_record).map_err(|e| {
             self.failed = true;
             CryptoError::from(e)

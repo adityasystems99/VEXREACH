@@ -52,8 +52,7 @@ spec:
           # Client mounts ONLY public descriptors & timeouts; zero relay private keys.
           volumeMounts:
             - name: client-config
-              mountPath: /cfg/client.toml
-              subPath: client.toml
+              mountPath: /cfg
               readOnly: true
             - name: tmp
               mountPath: /tmp

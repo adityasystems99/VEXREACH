@@ -3,6 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use private_relay_protocol::MAX_TARGET_ADDR_LEN;
 use tokio::net::lookup_host;
 
+use crate::config::validate_host_port;
 use crate::error::NetworkError;
 
 /// Exit outbound policy enforcing controlled destinations and SSRF IP blocklists (`THREAT_MODEL` Threat 3 / `KI-05`).
@@ -23,6 +24,7 @@ impl DestinationPolicy {
             || target.len() > MAX_TARGET_ADDR_LEN
             || target.contains('%')
             || target.chars().any(|c| c.is_control() || c.is_whitespace())
+            || validate_host_port(target).is_err()
         {
             return Err(NetworkError::PolicyDenied(
                 "malformed target address".into(),
@@ -120,6 +122,9 @@ impl DestinationPolicy {
         let is_benchmark_v6 =
             segments[0] == 0x2001 && segments[1] == 0x0002 && segments[2] == 0x0000;
         let is_doc = segments[0] == 0x2001 && segments[1] == 0x0db8;
+        let is_doc_rfc9637 = segments[0] == 0x3fff && (segments[1] & 0xf000) == 0x0000;
+        let is_orchid = segments[0] == 0x2001
+            && ((segments[1] & 0xfff0) == 0x0010 || (segments[1] & 0xfff0) == 0x0020);
         let is_6to4 = segments[0] == 0x2002;
         let is_unique_local = (segments[0] & 0xfe00) == 0xfc00;
         let ula_permitted = is_unique_local
@@ -137,6 +142,8 @@ impl DestinationPolicy {
             || is_teredo
             || is_benchmark_v6
             || is_doc
+            || is_doc_rfc9637
+            || is_orchid
             || is_6to4
             || (is_unique_local && !ula_permitted)
             || is_link_local

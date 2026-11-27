@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use private_relay_crypto::{HopHandshakeInitiator, StaticKeypair};
-use private_relay_network::{connect_noise_link, RelayConfig, RelayRole};
+use private_relay_network::{accept_noise_link, connect_noise_link, RelayConfig, RelayRole};
 use private_relay_protocol::{
     chunk_request, Cell, CircuitId, Command, DestroyReason, ExtendDirective, InnerPayload,
     MessageReassembler, ReassembledMessage, RelayHopPlaintext, RequestErrorCode, RequestId,
@@ -395,4 +395,265 @@ async fn exit_enforces_destination_timeout_and_cleans_up_circuit() {
     }
     assert_eq!(exit.active_circuit_count(), 0);
     exit.shutdown().await;
+}
+
+#[tokio::test]
+async fn outbound_trunk_isolates_stalled_circuit_without_dropping_siblings() {
+    use private_relay_crypto::HopHandshakeResponder;
+    use private_relay_network::PeerDescriptor;
+
+    let exit_kp = StaticKeypair::generate().unwrap();
+    let exit_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let exit_addr = exit_listener.local_addr().unwrap().to_string();
+
+    let exit_kp_srv = exit_kp.clone();
+    let exit_task = tokio::spawn(async move {
+        let (stream, _) = exit_listener.accept().await.unwrap();
+        let (mut r, mut w, _) = accept_noise_link(stream, &exit_kp_srv, Duration::from_secs(2))
+            .await
+            .unwrap();
+
+        // Circuit 1 CREATE -> CREATED (Hop 3 Exit)
+        let c1 = r.recv_cell(Duration::from_secs(2)).await.unwrap();
+        let (m1, _h1) = HopHandshakeResponder::new(3, &exit_kp_srv)
+            .unwrap()
+            .process_msg1_and_finish(&c1.body)
+            .unwrap();
+        w.send_cell(
+            &Cell::new(c1.circuit_id, Command::Created, 0, m1).unwrap(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        // Circuit 2 CREATE -> CREATED on the exact same Middle -> Exit trunk
+        let c2 = r.recv_cell(Duration::from_secs(2)).await.unwrap();
+        let (m2, mut h2) = HopHandshakeResponder::new(3, &exit_kp_srv)
+            .unwrap()
+            .process_msg1_and_finish(&c2.body)
+            .unwrap();
+        w.send_cell(
+            &Cell::new(c2.circuit_id, Command::Created, 0, m2).unwrap(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        // Wait until sibling forwards RelayData; flood closed c1 first, then reply on c2!
+        loop {
+            let cell = r.recv_cell(Duration::from_secs(2)).await.unwrap();
+            if cell.circuit_id == c2.circuit_id && cell.command == Command::RelayData {
+                for _ in 0..4 {
+                    let _ = w
+                        .send_cell(
+                            &Cell::new(c1.circuit_id, Command::RelayData, 0, vec![0xAA; 48])
+                                .unwrap(),
+                            Duration::from_secs(2),
+                        )
+                        .await;
+                }
+                let inner = h2.forward.open(&cell.body).unwrap();
+                let fwd = match RelayHopPlaintext::decode(&inner).unwrap() {
+                    RelayHopPlaintext::Message(b) => b,
+                    other => panic!("unexpected plaintext: {other:?}"),
+                };
+                assert_eq!(fwd, b"sibling-alive");
+                let reply = h2
+                    .backward
+                    .seal(
+                        &RelayHopPlaintext::Message(b"sibling-ok".to_vec())
+                            .encode()
+                            .unwrap(),
+                    )
+                    .unwrap();
+                w.send_cell(
+                    &Cell::new(c2.circuit_id, Command::RelayData, 0, reply).unwrap(),
+                    Duration::from_secs(2),
+                )
+                .await
+                .unwrap();
+                break;
+            }
+        }
+    });
+
+    let mid_kp = StaticKeypair::generate().unwrap();
+    let mut mid_cfg =
+        RelayConfig::with_generated_keypair("mid-trunk", RelayRole::Middle, "127.0.0.1:0", &mid_kp);
+    mid_cfg.allowed_next_peers = vec![PeerDescriptor {
+        id: "exit-mock".into(),
+        role: RelayRole::Exit,
+        addr: exit_addr.clone(),
+        public_key_hex: private_relay_network::encode_hex(exit_kp.public()),
+    }];
+    let middle = RelayServer::start(mid_cfg).await.unwrap();
+
+    // Connect Caller 1 -> Extend to mock Exit.
+    let c1_kp = StaticKeypair::generate().unwrap();
+    let (mut r1, mut w1) = connect_noise_link(
+        &middle.peer_descriptor().addr,
+        &c1_kp,
+        *mid_kp.public(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    let cid1 = CircuitId::from_role_bits(1, true).unwrap();
+    let mut init1 = HopHandshakeInitiator::new(2, *mid_kp.public()).unwrap();
+    w1.send_cell(
+        &Cell::new(cid1, Command::Create, 0, init1.write_msg1().unwrap()).unwrap(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    let created1 = r1.recv_cell(Duration::from_secs(2)).await.unwrap();
+    let mut hop2_c1 = init1.finish_with_msg2(&created1.body).unwrap();
+    let mut init3_c1 = HopHandshakeInitiator::new(3, *exit_kp.public()).unwrap();
+    let ext1 = RelayHopPlaintext::Extend(ExtendDirective {
+        next_hop_addr: exit_addr.clone(),
+        next_hop_pub: *exit_kp.public(),
+        handshake_msg1: init3_c1.write_msg1().unwrap(),
+    });
+    w1.send_cell(
+        &Cell::new(
+            cid1,
+            Command::Extend,
+            0,
+            hop2_c1.forward.seal(&ext1.encode().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        r1.recv_cell(Duration::from_secs(2)).await.unwrap().command,
+        Command::Extended
+    );
+
+    // Connect Caller 2 -> Extend over same shared Middle->Exit trunk.
+    let c2_kp = StaticKeypair::generate().unwrap();
+    let (mut r2, mut w2) = connect_noise_link(
+        &middle.peer_descriptor().addr,
+        &c2_kp,
+        *mid_kp.public(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    let cid2 = CircuitId::from_role_bits(2, true).unwrap();
+    let mut init2_c2 = HopHandshakeInitiator::new(2, *mid_kp.public()).unwrap();
+    w2.send_cell(
+        &Cell::new(cid2, Command::Create, 0, init2_c2.write_msg1().unwrap()).unwrap(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    let created2 = r2.recv_cell(Duration::from_secs(2)).await.unwrap();
+    let mut hop2_c2 = init2_c2.finish_with_msg2(&created2.body).unwrap();
+    let mut init3_c2 = HopHandshakeInitiator::new(3, *exit_kp.public()).unwrap();
+    let ext2 = RelayHopPlaintext::Extend(ExtendDirective {
+        next_hop_addr: exit_addr,
+        next_hop_pub: *exit_kp.public(),
+        handshake_msg1: init3_c2.write_msg1().unwrap(),
+    });
+    w2.send_cell(
+        &Cell::new(
+            cid2,
+            Command::Extend,
+            0,
+            hop2_c2.forward.seal(&ext2.encode().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    let extd2 = r2.recv_cell(Duration::from_secs(2)).await.unwrap();
+    let msg2_3 =
+        match RelayHopPlaintext::decode(&hop2_c2.backward.open(&extd2.body).unwrap()).unwrap() {
+            RelayHopPlaintext::Extended(b) => b,
+            other => panic!("expected Extended: {other:?}"),
+        };
+    let mut hop3_c2 = init3_c2.finish_with_msg2(&msg2_3).unwrap();
+
+    // Close Caller 1 so c1 dies while Caller 2 sends and receives across shared trunk.
+    drop(r1);
+    drop(w1);
+    tokio::time::sleep(Duration::from_millis(80)).await;
+
+    let payload3 = hop3_c2
+        .forward
+        .seal(
+            &RelayHopPlaintext::Message(b"sibling-alive".to_vec())
+                .encode()
+                .unwrap(),
+        )
+        .unwrap();
+    let payload2 = hop2_c2
+        .forward
+        .seal(&RelayHopPlaintext::Forward(payload3).encode().unwrap())
+        .unwrap();
+    w2.send_cell(
+        &Cell::new(cid2, Command::RelayData, 0, payload2).unwrap(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+
+    let resp_cell = r2.recv_cell(Duration::from_secs(2)).await.unwrap();
+    assert_eq!(resp_cell.command, Command::RelayData);
+    let inner2 = hop2_c2.backward.open(&resp_cell.body).unwrap();
+    let inner3 = hop3_c2.backward.open(&inner2).unwrap();
+    let msg = match RelayHopPlaintext::decode(&inner3).unwrap() {
+        RelayHopPlaintext::Message(b) => b,
+        other => panic!("expected sibling reply message: {other:?}"),
+    };
+    assert_eq!(msg, b"sibling-ok");
+
+    exit_task.await.unwrap();
+    middle.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_drains_active_circuits_and_delivers_destroy_cleanly() {
+    let entry_kp = StaticKeypair::generate().unwrap();
+    let entry_cfg =
+        RelayConfig::with_generated_keypair("entry-sd", RelayRole::Entry, "127.0.0.1:0", &entry_kp);
+    let entry = RelayServer::start(entry_cfg).await.unwrap();
+
+    let client_kp = StaticKeypair::generate().unwrap();
+    let (mut reader, mut writer) = connect_noise_link(
+        &entry.peer_descriptor().addr,
+        &client_kp,
+        *entry_kp.public(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+
+    let cid = CircuitId::from_role_bits(1, true).unwrap();
+    let mut init = HopHandshakeInitiator::new(1, *entry_kp.public()).unwrap();
+    writer
+        .send_cell(
+            &Cell::new(cid, Command::Create, 0, init.write_msg1().unwrap()).unwrap(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reader
+            .recv_cell(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .command,
+        Command::Created
+    );
+    assert_eq!(entry.active_circuit_count(), 1);
+
+    let sd_task = tokio::spawn(entry.shutdown());
+    let destroy = reader.recv_cell(Duration::from_secs(2)).await.unwrap();
+    assert_eq!(destroy.command, Command::Destroy);
+    assert_eq!(destroy.destroy_reason().unwrap(), DestroyReason::Normal);
+    sd_task.await.unwrap();
 }

@@ -290,26 +290,27 @@ pub async fn run_relay_cli(expected_role: RelayRole, bin_name: &str, args: &[Str
         return ExitCode::SUCCESS;
     }
 
-    let handle = match RelayServer::start(cfg.clone()).await {
+    let cfg_id = cfg.id.clone();
+    let handle = match RelayServer::start(cfg).await {
         Ok(h) => h,
         Err(e) => {
             eprintln!("error: failed to start {bin_name}: {e}");
             return ExitCode::FAILURE;
         }
     };
+    let desc = handle.peer_descriptor().clone();
 
     println!(
-        "STATUS=READY id={} role={:?} listen={}",
-        cfg.id,
-        cfg.role,
+        "STATUS=READY id={cfg_id} role={:?} listen={}",
+        desc.role,
         handle.local_addr()
     );
 
     wait_for_shutdown_signal().await;
 
-    println!("STATUS=SHUTTING_DOWN id={}", cfg.id);
+    println!("STATUS=SHUTTING_DOWN id={cfg_id}");
     handle.shutdown().await;
-    println!("STATUS=STOPPED id={}", cfg.id);
+    println!("STATUS=STOPPED id={cfg_id}");
     ExitCode::SUCCESS
 }
 
@@ -603,9 +604,10 @@ pub fn build_http_request_from_url(url: &str) -> Result<(String, Vec<u8>), Strin
         return Err("URL must begin with http://".to_owned());
     };
 
-    let (authority, path_raw) = match rest.find(['/', '?']) {
-        Some(idx) => (&rest[..idx], &rest[idx..]),
-        None => (rest, "/"),
+    let (without_frag, _) = rest.split_once('#').unwrap_or((rest, ""));
+    let (authority, path_raw) = match without_frag.find(['/', '?']) {
+        Some(idx) => (&without_frag[..idx], &without_frag[idx..]),
+        None => (without_frag, "/"),
     };
 
     if authority.is_empty() {
@@ -628,7 +630,10 @@ pub fn build_http_request_from_url(url: &str) -> Result<(String, Vec<u8>), Strin
         } else {
             return Err("malformed port after IPv6 literal".to_owned());
         }
-    } else if let Some((_, port_s)) = authority.rsplit_once(':') {
+    } else if let Some((h, port_s)) = authority.rsplit_once(':') {
+        if h.contains(':') {
+            return Err("unbracketed IPv6 literal in URL must use [...]".to_owned());
+        }
         validate_port_str(port_s)?;
         authority.to_owned()
     } else {
@@ -1151,11 +1156,20 @@ async fn run_http_health_probe(addr: &str) -> Result<(), String> {
             }
         }
         let text = String::from_utf8_lossy(&buf);
-        let first_line = text.lines().next().unwrap_or("");
-        if !(first_line.starts_with("HTTP/1.1 200") || first_line.starts_with("HTTP/1.0 200")) {
+        let first_line = text.lines().next().unwrap_or("").trim_end_matches('\r');
+        let ok_status = first_line == "HTTP/1.1 200"
+            || first_line.starts_with("HTTP/1.1 200 ")
+            || first_line == "HTTP/1.0 200"
+            || first_line.starts_with("HTTP/1.0 200 ");
+        if !ok_status {
             return Err(format!("unexpected HTTP status line: '{first_line}'"));
         }
-        if !text.contains("\"status\":\"ok\"") {
+        let body_part = text
+            .split_once("\r\n\r\n")
+            .or_else(|| text.split_once("\n\n"))
+            .map(|(_, b)| b)
+            .unwrap_or("");
+        if !body_part.contains("\"status\":\"ok\"") {
             return Err("health body missing status=ok marker".to_owned());
         }
         Ok(())

@@ -156,9 +156,15 @@ fn cli_arg_parsing_and_url_validation_unit_checks() {
     let (hp_v6, _) = build_http_request_from_url("http://[::1]:9000/test").unwrap();
     assert_eq!(hp_v6, "[::1]:9000");
 
+    let (hp_frag, raw_frag) =
+        build_http_request_from_url("http://example.com#ignored-fragment").unwrap();
+    assert_eq!(hp_frag, "example.com:80");
+    assert!(!String::from_utf8_lossy(&raw_frag).contains("ignored-fragment"));
+
     assert!(build_http_request_from_url("https://example.com/").is_err());
     assert!(build_http_request_from_url("http://user@127.0.0.1:9000/").is_err());
     assert!(build_http_request_from_url("http://127.0.0.1:9000/ bad").is_err());
+    assert!(build_http_request_from_url("http://::1:9000/test").is_err());
 }
 
 #[test]

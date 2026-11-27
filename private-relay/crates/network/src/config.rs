@@ -1,3 +1,5 @@
+use std::fmt;
+use std::io::Read;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -7,7 +9,7 @@ use private_relay_protocol::{
     X25519_KEY_LEN,
 };
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::NetworkError;
 
@@ -47,7 +49,7 @@ impl PeerDescriptor {
 }
 
 /// Complete typed startup configuration for a single relay instance.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RelayConfig {
     pub id: String,
     pub role: RelayRole,
@@ -166,7 +168,7 @@ impl RelayConfig {
     }
 
     /// Reads `private_key_hex` from `private_key_file` when omitted from non-sensitive ConfigMaps.
-    /// Rejects ambiguous configs supplying both `private_key_hex` and `private_key_file`.
+    /// Rejects empty paths, non-regular or oversized (> 256B) files, and conflicting inline keys.
     pub fn resolve_secret_file(&mut self) -> Result<(), NetworkError> {
         let has_inline = !self.private_key_hex.trim().is_empty();
         if has_inline && self.private_key_file.is_some() {
@@ -176,13 +178,44 @@ impl RelayConfig {
         }
         if !has_inline {
             if let Some(ref path) = self.private_key_file {
-                let raw = Zeroizing::new(std::fs::read_to_string(path).map_err(|e| {
+                if path.trim().is_empty() {
+                    return Err(NetworkError::Config(
+                        "private_key_file path must not be empty".into(),
+                    ));
+                }
+                let file = std::fs::File::open(path).map_err(|e| {
                     NetworkError::Config(format!("failed to read private_key_file '{path}': {e}"))
-                })?);
+                })?;
+                if let Ok(meta) = file.metadata() {
+                    if !meta.is_file() {
+                        return Err(NetworkError::Config(format!(
+                            "private_key_file '{path}' must be a regular file"
+                        )));
+                    }
+                    if meta.len() > 256 {
+                        return Err(NetworkError::Config(format!(
+                            "private_key_file '{path}' exceeds 256-byte secret limit"
+                        )));
+                    }
+                }
+                let mut raw = Zeroizing::new(String::new());
+                file.take(257).read_to_string(&mut raw).map_err(|e| {
+                    NetworkError::Config(format!("failed to read private_key_file '{path}': {e}"))
+                })?;
+                if raw.len() > 256 {
+                    return Err(NetworkError::Config(format!(
+                        "private_key_file '{path}' exceeds 256-byte secret limit"
+                    )));
+                }
                 self.private_key_hex = raw.trim().to_owned();
             }
         }
         Ok(())
+    }
+
+    /// Zeroizes any in-memory plaintext `private_key_hex` after keypair construction.
+    pub fn scrub_private_key(&mut self) {
+        self.private_key_hex.zeroize();
     }
 
     /// Returns a cloned non-sensitive configuration referencing `secret_file_path` without inline secrets.
@@ -281,6 +314,32 @@ impl RelayConfig {
             }
         }
         Ok(())
+    }
+}
+
+impl fmt::Debug for RelayConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RelayConfig")
+            .field("id", &self.id)
+            .field("role", &self.role)
+            .field("listen_addr", &self.listen_addr)
+            .field("public_key_hex", &self.public_key_hex)
+            .field("private_key_hex", &"[REDACTED]")
+            .field("private_key_file", &self.private_key_file)
+            .field("allowed_next_peers_len", &self.allowed_next_peers.len())
+            .field("allow_loopback_for_test", &self.allow_loopback_for_test)
+            .field(
+                "allow_private_targets_for_test",
+                &self.allow_private_targets_for_test,
+            )
+            .field("allowed_targets_len", &self.allowed_targets.len())
+            .finish()
+    }
+}
+
+impl Drop for RelayConfig {
+    fn drop(&mut self) {
+        self.private_key_hex.zeroize();
     }
 }
 
@@ -392,12 +451,33 @@ fn validate_peer_descriptor(
     Ok(())
 }
 
-fn validate_host_port(addr: &str) -> Result<(), NetworkError> {
+pub(crate) fn validate_host_port(addr: &str) -> Result<(), NetworkError> {
     if addr.is_empty() || addr.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return Err(NetworkError::Config("peer addr malformed".into()));
     }
-    let Some((host, port_str)) = addr.rsplit_once(':') else {
-        return Err(NetworkError::Config("peer addr must be host:port".into()));
+    let (host, port_str) = if addr.starts_with('[') {
+        let Some(end_bracket) = addr.find(']') else {
+            return Err(NetworkError::Config("malformed bracketed IPv6 addr".into()));
+        };
+        let inner = &addr[1..end_bracket];
+        if inner.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err(NetworkError::Config("invalid IPv6 literal in addr".into()));
+        }
+        let rest = &addr[end_bracket + 1..];
+        let Some(port_s) = rest.strip_prefix(':') else {
+            return Err(NetworkError::Config("peer addr must include :port".into()));
+        };
+        (inner, port_s)
+    } else {
+        let Some((h, p)) = addr.rsplit_once(':') else {
+            return Err(NetworkError::Config("peer addr must be host:port".into()));
+        };
+        if h.contains(':') {
+            return Err(NetworkError::Config(
+                "unbracketed IPv6 addr must use [ip]:port form".into(),
+            ));
+        }
+        (h, p)
     };
     let port: u16 = port_str
         .parse()

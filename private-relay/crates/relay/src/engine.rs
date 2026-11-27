@@ -16,7 +16,9 @@ use private_relay_protocol::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{
+    mpsc, oneshot, watch, Mutex as AsyncMutex, Notify, OwnedSemaphorePermit, Semaphore,
+};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use tracing::{debug, info, warn};
@@ -24,6 +26,7 @@ use tracing::{debug, info, warn};
 use crate::error::RelayError;
 
 type OutboundLinkMap = HashMap<(String, [u8; 32]), Arc<OutboundLinkHandle>>;
+type DialLockMap = HashMap<(String, [u8; 32]), Arc<AsyncMutex<()>>>;
 type PendingDestResponse =
     oneshot::Receiver<Result<Vec<u8>, private_relay_protocol::RequestErrorCode>>;
 
@@ -34,9 +37,30 @@ struct RelayRuntime {
     dest_policy: DestinationPolicy,
     conn_semaphore: Arc<Semaphore>,
     active_circuits: AtomicUsize,
+    active_tasks: AtomicUsize,
+    drain_notify: Notify,
     per_ip_circuits: Mutex<HashMap<IpAddr, usize>>,
     outbound_links: AsyncMutex<OutboundLinkMap>,
+    dial_locks: Mutex<DialLockMap>,
     shutdown_rx: watch::Receiver<bool>,
+}
+
+/// RAII tracker ensuring `RelayHandle::shutdown()` waits cleanly for spawned tasks to exit.
+struct TaskTrackGuard(Arc<RelayRuntime>);
+
+impl TaskTrackGuard {
+    fn spawn_counted(runtime: &Arc<RelayRuntime>) -> Self {
+        runtime.active_tasks.fetch_add(1, Ordering::AcqRel);
+        Self(Arc::clone(runtime))
+    }
+}
+
+impl Drop for TaskTrackGuard {
+    fn drop(&mut self) {
+        if self.0.active_tasks.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.0.drain_notify.notify_waiters();
+        }
+    }
 }
 
 impl RelayRuntime {
@@ -123,12 +147,38 @@ impl RelayRuntime {
         expected_pub: [u8; 32],
     ) -> Result<Arc<OutboundLinkHandle>, DestroyReason> {
         let key = (addr.to_owned(), expected_pub);
-        let mut pool = self.outbound_links.lock().await;
-        if let Some(existing) = pool.get(&key) {
-            if existing.is_alive() {
-                return Ok(Arc::clone(existing));
+        {
+            let mut pool = self.outbound_links.lock().await;
+            if let Some(existing) = pool.get(&key) {
+                if existing.is_alive() {
+                    return Ok(Arc::clone(existing));
+                }
+                pool.remove(&key);
             }
-            pool.remove(&key);
+        }
+
+        // Per-peer dial mutex serializes duplicate connects to the same peer without blocking other peers.
+        let dial_mutex = {
+            let mut locks = self
+                .dial_locks
+                .lock()
+                .map_err(|_| DestroyReason::ProtocolError)?;
+            Arc::clone(
+                locks
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(AsyncMutex::new(()))),
+            )
+        };
+        let _dial_guard = dial_mutex.lock().await;
+
+        {
+            let mut pool = self.outbound_links.lock().await;
+            if let Some(existing) = pool.get(&key) {
+                if existing.is_alive() {
+                    return Ok(Arc::clone(existing));
+                }
+                pool.remove(&key);
+            }
         }
 
         let (reader, writer) = connect_noise_link_with_rekey(
@@ -146,6 +196,7 @@ impl RelayRuntime {
         })?;
 
         let handle = OutboundLinkHandle::spawn(Arc::clone(self), key.clone(), reader, writer);
+        let mut pool = self.outbound_links.lock().await;
         pool.insert(key, Arc::clone(&handle));
         Ok(handle)
     }
@@ -204,28 +255,53 @@ impl OutboundLinkHandle {
         let io_timeout = runtime.io_timeout();
         let idle_ttl = runtime.idle_ttl();
 
-        // Dedicated serialized Noise link writer task.
+        // Dedicated serialized Noise link writer task (drains final Destroy frames on shutdown).
         let handle_w = Arc::clone(&handle);
         let mut shutdown_w = runtime.shutdown_rx.clone();
         let routes_w = Arc::clone(&routes);
         let rt_w = Arc::clone(&runtime);
         let key_w = pool_key.clone();
+        let writer_track = TaskTrackGuard::spawn_counted(&runtime);
         tokio::spawn(async move {
+            let _track = writer_track;
+            let mut shutting_down = false;
+            let drain_sleep = sleep(Duration::from_millis(250));
+            tokio::pin!(drain_sleep);
             loop {
-                tokio::select! {
-                    _ = shutdown_w.changed() => {
-                        if *shutdown_w.borrow() {
-                            break;
+                if shutting_down {
+                    tokio::select! {
+                        _ = &mut drain_sleep => break,
+                        maybe_cell = rx.recv() => {
+                            match maybe_cell {
+                                Some(cell) => {
+                                    let wait = io_timeout.min(Duration::from_millis(250));
+                                    if writer.send_cell(&cell, wait).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                None => break,
+                            }
                         }
                     }
-                    maybe_cell = rx.recv() => {
-                        match maybe_cell {
-                            Some(cell) => {
-                                if writer.send_cell(&cell, io_timeout).await.is_err() {
-                                    break;
-                                }
+                } else {
+                    tokio::select! {
+                        _ = shutdown_w.changed() => {
+                            if *shutdown_w.borrow() {
+                                shutting_down = true;
+                                drain_sleep
+                                    .as_mut()
+                                    .reset(tokio::time::Instant::now() + Duration::from_millis(250));
                             }
-                            None => break,
+                        }
+                        maybe_cell = rx.recv() => {
+                            match maybe_cell {
+                                Some(cell) => {
+                                    if writer.send_cell(&cell, io_timeout).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                None => break,
+                            }
                         }
                     }
                 }
@@ -241,10 +317,13 @@ impl OutboundLinkHandle {
             }
         });
 
-        // Dedicated Noise link reader demuxer pushing downstream responses into circuit queues.
+        // Dedicated Noise link reader demuxer pushing downstream responses into per-circuit queues.
         let handle_r = Arc::clone(&handle);
         let mut shutdown_r = runtime.shutdown_rx.clone();
+        let rt_r = Arc::clone(&runtime);
+        let reader_track = TaskTrackGuard::spawn_counted(&runtime);
         tokio::spawn(async move {
+            let _track = reader_track;
             loop {
                 tokio::select! {
                     _ = shutdown_r.changed() => {
@@ -255,18 +334,36 @@ impl OutboundLinkHandle {
                     recv_res = reader.recv_cell_with_timeouts(idle_ttl, io_timeout) => {
                         match recv_res {
                             Ok(cell) => {
-                                let target = {
-                                    routes
-                                        .lock()
-                                        .ok()
-                                        .and_then(|g| g.get(&cell.circuit_id).cloned())
-                                };
+                                let target = routes
+                                    .lock()
+                                    .ok()
+                                    .and_then(|g| g.get(&cell.circuit_id).cloned());
                                 if let Some(circuit_tx) = target {
-                                    if circuit_tx.send_timeout(cell, io_timeout).await.is_err() {
-                                        if let Ok(mut g) = routes.lock() {
-                                            g.clear();
+                                    match circuit_tx.try_send(cell) {
+                                        Ok(()) => {}
+                                        Err(tokio::sync::mpsc::error::TrySendError::Full(c)) => {
+                                            let cid = c.circuit_id;
+                                            let wait = io_timeout.min(Duration::from_millis(500));
+                                            if circuit_tx.send_timeout(c, wait).await.is_err() {
+                                                if let Ok(mut g) = routes.lock() {
+                                                    g.remove(&cid);
+                                                }
+                                                let _ = handle_r.tx.try_send(Cell::destroy(
+                                                    cid,
+                                                    DestroyReason::ResourceLimit,
+                                                ));
+                                            }
                                         }
-                                        break;
+                                        Err(tokio::sync::mpsc::error::TrySendError::Closed(c)) => {
+                                            let cid = c.circuit_id;
+                                            if let Ok(mut g) = routes.lock() {
+                                                g.remove(&cid);
+                                            }
+                                            let _ = handle_r.tx.try_send(Cell::destroy(
+                                                cid,
+                                                DestroyReason::PeerDisconnected,
+                                            ));
+                                        }
                                     }
                                 }
                             }
@@ -277,7 +374,7 @@ impl OutboundLinkHandle {
             }
             handle_r.alive.store(false, Ordering::Release);
             notify_routes_disconnected(&routes).await;
-            let mut pool = runtime.outbound_links.lock().await;
+            let mut pool = rt_r.outbound_links.lock().await;
             if let Some(cur) = pool.get(&pool_key) {
                 if Arc::ptr_eq(cur, &handle_r) {
                     pool.remove(&pool_key);
@@ -381,6 +478,23 @@ impl RelayHandle {
     pub async fn shutdown(self) {
         let _ = self.shutdown_tx.send(true);
         let _ = self.accept_task.await;
+        let grace = self
+            .runtime
+            .io_timeout()
+            .clamp(Duration::from_millis(1_500), Duration::from_secs(5));
+        let _ = timeout(grace, async {
+            loop {
+                let notified = self.runtime.drain_notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.runtime.active_tasks.load(Ordering::Acquire) == 0 {
+                    break;
+                }
+                notified.await;
+            }
+        })
+        .await;
+        self.runtime.outbound_links.lock().await.clear();
     }
 }
 
@@ -392,7 +506,8 @@ impl RelayServer {
         let listener = TcpListener::bind(&config.listen_addr).await?;
         let local_addr = listener.local_addr()?;
 
-        let mut effective_config = config.clone();
+        let mut effective_config = config;
+        effective_config.scrub_private_key();
         effective_config.listen_addr = local_addr.to_string();
 
         let descriptor = PeerDescriptor {
@@ -415,8 +530,11 @@ impl RelayServer {
             dest_policy,
             conn_semaphore: Arc::new(Semaphore::new(effective_config.max_concurrent_connections)),
             active_circuits: AtomicUsize::new(0),
+            active_tasks: AtomicUsize::new(0),
+            drain_notify: Notify::new(),
             per_ip_circuits: Mutex::new(HashMap::new()),
             outbound_links: AsyncMutex::new(HashMap::new()),
+            dial_locks: Mutex::new(HashMap::new()),
             shutdown_rx: shutdown_rx.clone(),
         });
 
@@ -442,7 +560,9 @@ impl RelayServer {
                                 match Arc::clone(&rt_accept.conn_semaphore).try_acquire_owned() {
                                     Ok(permit) => {
                                         let rt_conn = Arc::clone(&rt_accept);
+                                        let conn_track = TaskTrackGuard::spawn_counted(&rt_conn);
                                         tokio::spawn(async move {
+                                            let _track = conn_track;
                                             handle_inbound_connection(rt_conn, stream, peer_addr, permit).await;
                                         });
                                     }
@@ -522,27 +642,13 @@ async fn spawn_inbound_link_loop(
 
     let io_timeout = runtime.io_timeout();
     let idle_ttl = runtime.idle_ttl();
-    let mut shutdown_w = runtime.shutdown_rx.clone();
     let (writer_dead_tx, mut writer_dead_rx) = watch::channel(false);
 
+    // Writer drains until all up_tx handles (reader + circuit teardown Destroy senders) drop.
     let writer_handle = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = shutdown_w.changed() => {
-                    if *shutdown_w.borrow() {
-                        break;
-                    }
-                }
-                maybe_cell = up_rx.recv() => {
-                    match maybe_cell {
-                        Some(cell) => {
-                            if writer.send_cell(&cell, io_timeout).await.is_err() {
-                                break;
-                            }
-                        }
-                        None => break,
-                    }
-                }
+        while let Some(cell) = up_rx.recv().await {
+            if writer.send_cell(&cell, io_timeout).await.is_err() {
+                break;
             }
         }
         let _ = writer.shutdown().await;
@@ -581,7 +687,7 @@ async fn spawn_inbound_link_loop(
 
     notify_routes_disconnected(&routes).await;
     drop(up_tx);
-    let _ = writer_handle.await;
+    let _ = timeout(io_timeout.min(Duration::from_secs(2)), writer_handle).await;
 }
 
 async fn dispatch_inbound_cell(
@@ -669,9 +775,11 @@ async fn dispatch_inbound_cell(
         );
 
         let rt_circuit = Arc::clone(runtime);
+        let circuit_track = TaskTrackGuard::spawn_counted(&rt_circuit);
         let up_tx_circuit = up_tx.clone();
         let routes_circuit = Arc::clone(routes);
         tokio::spawn(async move {
+            let _track = circuit_track;
             run_circuit_task(
                 rt_circuit,
                 cid,
@@ -1348,12 +1456,26 @@ async fn run_exit_circuit_task(
                                         Ok(decoded_req) => {
                                             let (tx, rx) = oneshot::channel();
                                             let policy = runtime.dest_policy.clone();
+                                            let dest_track = TaskTrackGuard::spawn_counted(&runtime);
+                                            let mut sd_dest = runtime.shutdown_rx.clone();
                                             tokio::spawn(async move {
-                                                let outcome = execute_destination_request(
+                                                let _track = dest_track;
+                                                let exec_fut = execute_destination_request(
                                                     &policy,
                                                     decoded_req,
                                                     dest_timeout,
-                                                ).await;
+                                                );
+                                                tokio::pin!(exec_fut);
+                                                let outcome = tokio::select! {
+                                                    _ = sd_dest.changed() => {
+                                                        if *sd_dest.borrow() {
+                                                            Err(RequestErrorCode::InternalError)
+                                                        } else {
+                                                            exec_fut.await
+                                                        }
+                                                    }
+                                                    res = &mut exec_fut => res,
+                                                };
                                                 let _ = tx.send(outcome);
                                             });
                                             active_dest_task = Some((rid, rx));
@@ -1496,5 +1618,102 @@ async fn execute_destination_request(
     match timeout(dest_timeout, exec_future).await {
         Ok(res) => res,
         Err(_) => Err(RequestErrorCode::Timeout),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use private_relay_network::accept_noise_link;
+
+    #[tokio::test]
+    async fn outbound_link_demuxer_evicts_full_circuit_without_breaking_sibling() {
+        let kp_local = StaticKeypair::generate().unwrap();
+        let kp_remote = StaticKeypair::generate().unwrap();
+        let mut cfg = RelayConfig::with_generated_keypair(
+            "mid-unit",
+            RelayRole::Middle,
+            "127.0.0.1:0",
+            &kp_local,
+        );
+        cfg.io_timeout_ms = 80;
+        let (_sd_tx, sd_rx) = watch::channel(false);
+        let runtime = Arc::new(RelayRuntime {
+            dest_policy: DestinationPolicy::default(),
+            conn_semaphore: Arc::new(Semaphore::new(cfg.max_concurrent_connections)),
+            config: cfg,
+            keypair: kp_local.clone(),
+            active_circuits: AtomicUsize::new(0),
+            active_tasks: AtomicUsize::new(0),
+            drain_notify: Notify::new(),
+            per_ip_circuits: Mutex::new(HashMap::new()),
+            outbound_links: AsyncMutex::new(HashMap::new()),
+            dial_locks: Mutex::new(HashMap::new()),
+            shutdown_rx: sd_rx,
+        });
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let kp_r = kp_remote.clone();
+        let peer_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            accept_noise_link(stream, &kp_r, Duration::from_secs(2))
+                .await
+                .unwrap()
+        });
+
+        let (lr, lw) = connect_noise_link_with_rekey(
+            &addr,
+            &kp_local,
+            *kp_remote.public(),
+            Duration::from_secs(2),
+            runtime.config.link_rekey_policy(),
+        )
+        .await
+        .unwrap();
+        let (mut pr, mut pw, _) = peer_task.await.unwrap();
+
+        let link =
+            OutboundLinkHandle::spawn(Arc::clone(&runtime), (addr, *kp_remote.public()), lr, lw);
+
+        // Register cid1 with cap=1 and prefill it so next downstream cell hits TrySendError::Full.
+        let (cid1, _rx1) = link.register_circuit(1).unwrap();
+        let (cid2, mut rx2) = link.register_circuit(4).unwrap();
+        {
+            let guard = link.routes.lock().unwrap();
+            guard
+                .get(&cid1)
+                .unwrap()
+                .try_send(Cell::new(cid1, Command::RelayData, 0, vec![1; 4]).unwrap())
+                .unwrap();
+        }
+
+        // Peer sends downstream cell to full cid1, then valid cell to sibling cid2.
+        pw.send_cell(
+            &Cell::new(cid1, Command::RelayData, 0, vec![2; 4]).unwrap(),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        pw.send_cell(
+            &Cell::new(cid2, Command::RelayData, 0, vec![9; 4]).unwrap(),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+
+        // Peer must receive DESTROY(ResourceLimit) specifically for cid1, while sibling cid2 gets its cell intact.
+        let destroy_c1 = pr.recv_cell(Duration::from_secs(2)).await.unwrap();
+        assert_eq!(destroy_c1.circuit_id, cid1);
+        assert_eq!(destroy_c1.command, Command::Destroy);
+        assert_eq!(
+            destroy_c1.destroy_reason().unwrap(),
+            DestroyReason::ResourceLimit
+        );
+
+        let got_c2 = rx2.recv().await.unwrap();
+        assert_eq!(got_c2.circuit_id, cid2);
+        assert_eq!(got_c2.body, vec![9; 4]);
+        assert!(link.is_alive());
     }
 }

@@ -242,24 +242,31 @@ impl ClientCircuit {
 
         let raw_rid = self.next_request_id;
         let rid = RequestId::new(raw_rid)?;
-        self.last_request_id = Some(rid);
-        self.next_request_id = raw_rid
+        let chunks = chunk_request(rid, target_host_port, body)?;
+        let next_rid = raw_rid
             .checked_add(1)
             .ok_or(ClientError::InvalidState("request ID space exhausted"))?;
+        self.last_request_id = Some(rid);
+        self.next_request_id = next_rid;
 
         let mut req_state = RequestState::Idle;
         req_state.begin_request()?;
 
-        let chunks = chunk_request(rid, target_host_port, body)?;
         for ch in chunks {
             let inner = RelayHopPlaintext::Message(ch.encode()?);
             let sealed = self.crypto.seal_forward_to_hop(3, &inner)?;
-            self.writer
+            if let Err(err) = self
+                .writer
                 .send_cell(
                     &Cell::new(self.cid, Command::RelayData, 0, sealed)?,
                     self.config.io_timeout,
                 )
-                .await?;
+                .await
+            {
+                let _ = self.state.destroy(DestroyReason::PeerDisconnected);
+                let _ = self.writer.shutdown().await;
+                return Err(err.into());
+            }
         }
         req_state.finish_request()?;
 
@@ -317,10 +324,39 @@ impl ClientCircuit {
         .await;
 
         match resp_res {
-            Ok(inner) => inner,
-            Err(_) => Err(ClientError::Network(
-                private_relay_network::NetworkError::Timeout("awaiting circuit response"),
-            )),
+            Ok(Ok(bytes)) => Ok(bytes),
+            Ok(Err(err @ ClientError::RemoteError(_))) => Err(err),
+            Ok(Err(err)) => {
+                if !self.state.is_closed() {
+                    let _ = self.state.destroy(DestroyReason::ProtocolError);
+                    let _ = self
+                        .writer
+                        .send_cell(
+                            &Cell::destroy(self.cid, DestroyReason::Normal),
+                            self.config.io_timeout.min(Duration::from_millis(500)),
+                        )
+                        .await;
+                    let _ = self.writer.shutdown().await;
+                }
+                Err(err)
+            }
+            Err(_) => {
+                // Invalidate client-side circuit on timeout so in-flight Exit work cannot collide with reuse.
+                if !self.state.is_closed() {
+                    let _ = self.state.destroy(DestroyReason::Normal);
+                    let _ = self
+                        .writer
+                        .send_cell(
+                            &Cell::destroy(self.cid, DestroyReason::Normal),
+                            self.config.io_timeout.min(Duration::from_millis(500)),
+                        )
+                        .await;
+                    let _ = self.writer.shutdown().await;
+                }
+                Err(ClientError::Network(
+                    private_relay_network::NetworkError::Timeout("awaiting circuit response"),
+                ))
+            }
         }
     }
 

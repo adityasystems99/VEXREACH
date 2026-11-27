@@ -15,6 +15,36 @@ use crate::error::NetworkError;
 
 const MAX_HANDSHAKE_FRAME_LEN: usize = 512;
 
+/// RAII cancellation guard ensuring half-read or half-written `600`-byte link frames
+/// permanently poison the shared `LinkSession` if the async future is dropped mid-frame.
+struct SessionFailGuard<'a> {
+    session: &'a Arc<Mutex<LinkSession>>,
+    armed: bool,
+}
+
+impl<'a> SessionFailGuard<'a> {
+    fn arm(session: &'a Arc<Mutex<LinkSession>>) -> Self {
+        Self {
+            session,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SessionFailGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            if let Ok(mut guard) = self.session.lock() {
+                guard.mark_failed();
+            }
+        }
+    }
+}
+
 /// Async read half of an authenticated `Noise_IK` TCP link receiving exact `600`-byte frames.
 pub struct LinkReader<R> {
     reader: R,
@@ -79,18 +109,17 @@ impl<R: AsyncRead + Unpin> LinkReader<R> {
                 Err(_) => return Err(NetworkError::Timeout("waiting for link frame")),
             }
 
+            let mut mid_frame_guard = SessionFailGuard::arm(&self.session);
             match timeout(frame_io_timeout, self.reader.read_exact(&mut wire[1..])).await {
-                Ok(Ok(_read_len)) => {}
+                Ok(Ok(_read_len)) => {
+                    mid_frame_guard.disarm();
+                }
                 Ok(Err(e)) => {
-                    if let Ok(mut guard) = self.session.lock() {
-                        guard.mark_failed();
-                    }
+                    drop(mid_frame_guard);
                     return Err(NetworkError::from(e));
                 }
                 Err(_) => {
-                    if let Ok(mut guard) = self.session.lock() {
-                        guard.mark_failed();
-                    }
+                    drop(mid_frame_guard);
                     return Err(NetworkError::Timeout("reading link frame body"));
                 }
             }
@@ -140,12 +169,9 @@ impl<W: AsyncWrite + Unpin> LinkWriter<W> {
                 .map_err(|_| NetworkError::PolicyDenied("session mutex poisoned".into()))?;
             guard.seal_rekey_and_rotate()?
         };
-        if let Err(e) = write_frame_with_timeout(&mut self.writer, &rekey_wire, io_timeout).await {
-            if let Ok(mut guard) = self.session.lock() {
-                guard.mark_failed();
-            }
-            return Err(e);
-        }
+        let mut wg = SessionFailGuard::arm(&self.session);
+        write_frame_with_timeout(&mut self.writer, &rekey_wire, io_timeout).await?;
+        wg.disarm();
         Ok(())
     }
 
@@ -169,14 +195,9 @@ impl<W: AsyncWrite + Unpin> LinkWriter<W> {
         };
 
         if let Some(rekey_wire) = maybe_rekey {
-            if let Err(e) =
-                write_frame_with_timeout(&mut self.writer, &rekey_wire, io_timeout).await
-            {
-                if let Ok(mut guard) = self.session.lock() {
-                    guard.mark_failed();
-                }
-                return Err(e);
-            }
+            let mut wg = SessionFailGuard::arm(&self.session);
+            write_frame_with_timeout(&mut self.writer, &rekey_wire, io_timeout).await?;
+            wg.disarm();
         }
 
         let wire = {
@@ -187,12 +208,9 @@ impl<W: AsyncWrite + Unpin> LinkWriter<W> {
             guard.seal_cell(cell)?
         };
 
-        if let Err(e) = write_frame_with_timeout(&mut self.writer, &wire, io_timeout).await {
-            if let Ok(mut guard) = self.session.lock() {
-                guard.mark_failed();
-            }
-            return Err(e);
-        }
+        let mut wg = SessionFailGuard::arm(&self.session);
+        write_frame_with_timeout(&mut self.writer, &wire, io_timeout).await?;
+        wg.disarm();
         Ok(())
     }
 

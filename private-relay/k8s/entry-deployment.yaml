@@ -85,12 +85,10 @@ spec:
               memory: "128Mi"
           volumeMounts:
             - name: entry-config
-              mountPath: /cfg/entry.toml
-              subPath: entry.toml
+              mountPath: /cfg
               readOnly: true
             - name: entry-secret
-              mountPath: /run/secrets/private_key_hex
-              subPath: private_key_hex
+              mountPath: /run/secrets
               readOnly: true
             - name: tmp
               mountPath: /tmp

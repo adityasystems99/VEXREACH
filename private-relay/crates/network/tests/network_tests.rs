@@ -6,8 +6,8 @@ use std::time::Duration;
 use private_relay_crypto::{LinkInitiator, LinkRekeyPolicy, LinkResponder, StaticKeypair};
 use private_relay_network::{
     accept_noise_link, accept_noise_link_with_rekey, connect_noise_link,
-    connect_noise_link_with_rekey, split_framed_session, ClientConfigFile, DestinationPolicy,
-    NetworkError, PeerDescriptor, RelayConfig, RelayRole,
+    connect_noise_link_with_rekey, encode_hex, split_framed_session, ClientConfigFile,
+    DestinationPolicy, NetworkError, PeerDescriptor, RelayConfig, RelayRole,
 };
 use private_relay_protocol::{Cell, CircuitId, Command, ProtocolError, OUTER_WIRE_FRAME_BYTES};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -580,4 +580,108 @@ fn config_rejects_invalid_roles_mismatched_keys_loop_and_bounds() {
     ccfg.middle.role = RelayRole::Middle;
     ccfg.exit.public_key_hex = ccfg.entry.public_key_hex.clone();
     assert!(ccfg.validate().is_err());
+}
+
+#[tokio::test]
+async fn config_redacts_secret_hardens_secret_files_and_validates_endpoints() {
+    let kp_exit = StaticKeypair::generate().unwrap();
+    let kp_mid = StaticKeypair::generate().unwrap();
+    let mut cfg =
+        RelayConfig::with_generated_keypair("exit-sec", RelayRole::Exit, "0.0.0.0:9103", &kp_exit);
+
+    // 1. Debug representation must never disclose plaintext private key hex.
+    let debug_str = format!("{cfg:?}");
+    let secret_hex = encode_hex(kp_exit.secret_bytes());
+    assert!(debug_str.contains("[REDACTED]"));
+    assert!(!debug_str.contains(&secret_hex));
+
+    // 2. Scrubbing clears inline key hex in memory.
+    let mut cfg_scrubbed = cfg.clone();
+    cfg_scrubbed.scrub_private_key();
+    assert!(cfg_scrubbed.keypair().is_err());
+
+    // 3. Hardened private_key_file checks reject empty, directory, missing, and > 256B files.
+    let base_toml = cfg.without_inline_secret("").to_toml_string().unwrap();
+    assert!(matches!(
+        RelayConfig::from_toml_str(&base_toml),
+        Err(NetworkError::Config(_))
+    ));
+
+    let dir_path = std::env::temp_dir();
+    let dir_toml = cfg
+        .without_inline_secret(dir_path.to_string_lossy().as_ref())
+        .to_toml_string()
+        .unwrap();
+    assert!(matches!(
+        RelayConfig::from_toml_str(&dir_toml),
+        Err(NetworkError::Config(_))
+    ));
+
+    let big_file = dir_path.join(format!("pr_big_secret_{}.key", std::process::id()));
+    std::fs::write(&big_file, "a".repeat(300)).unwrap();
+    let big_toml = cfg
+        .without_inline_secret(big_file.to_string_lossy().as_ref())
+        .to_toml_string()
+        .unwrap();
+    let big_res = RelayConfig::from_toml_str(&big_toml);
+    let _ = std::fs::remove_file(&big_file);
+    assert!(matches!(big_res, Err(NetworkError::Config(_))));
+
+    // 4. Reject unbracketed IPv6 peer endpoint and new IETF reserved IPv6/zero-port policy targets.
+    cfg.role = RelayRole::Middle;
+    cfg.allowed_next_peers = vec![PeerDescriptor {
+        id: "bad-v6".into(),
+        role: RelayRole::Exit,
+        addr: "::1:9103".into(),
+        public_key_hex: encode_hex(kp_mid.public()),
+    }];
+    assert!(matches!(cfg.validate(), Err(NetworkError::Config(_))));
+
+    let pol = DestinationPolicy::default();
+    assert!(pol.validate_ip("2001:20::1".parse().unwrap()).is_err());
+    assert!(pol.validate_ip("3fff::1".parse().unwrap()).is_err());
+    assert!(matches!(
+        pol.resolve_and_validate("example.com:0").await,
+        Err(NetworkError::PolicyDenied(_))
+    ));
+}
+
+#[tokio::test]
+async fn mid_frame_cancellation_poisons_link_session() {
+    use tokio::io::AsyncWriteExt;
+
+    let (a, mut b) = tokio::io::duplex(OUTER_WIRE_FRAME_BYTES * 2);
+    let kp_cli = StaticKeypair::generate().unwrap();
+    let kp_srv = StaticKeypair::generate().unwrap();
+
+    let mut init = LinkInitiator::new(&kp_cli, *kp_srv.public()).unwrap();
+    let msg1 = init.write_msg1().unwrap();
+    let (msg2, sess_srv) = LinkResponder::new(&kp_srv)
+        .unwrap()
+        .process_msg1_and_finish(&msg1)
+        .unwrap();
+    let _sess_cli = init.finish_with_msg2(&msg2).unwrap();
+    let (mut ra, _wa) = split_framed_session(a, sess_srv);
+
+    // Send only 12 bytes of a 600B frame so wire[..1] arrives, then stall mid-frame until outer timeout cancels future.
+    b.write_all(&[0x02u8; 12]).await.unwrap();
+    b.flush().await.unwrap();
+
+    let cancelled = tokio::time::timeout(
+        Duration::from_millis(40),
+        ra.recv_cell_with_timeouts(Duration::from_secs(2), Duration::from_secs(2)),
+    )
+    .await;
+    assert!(
+        cancelled.is_err(),
+        "outer timeout must cancel mid-frame read"
+    );
+
+    // Subsequent call must fail closed (InvalidState) rather than resuming mid-frame on corrupted offset.
+    b.write_all(&[0u8; OUTER_WIRE_FRAME_BYTES]).await.unwrap();
+    let err = ra.recv_cell(Duration::from_secs(1)).await.unwrap_err();
+    assert!(
+        matches!(err, NetworkError::Crypto(_)),
+        "expected failed-closed Crypto error after mid-frame cancellation, got {err:?}"
+    );
 }

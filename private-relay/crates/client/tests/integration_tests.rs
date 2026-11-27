@@ -635,3 +635,47 @@ async fn e2e_redirect_response_is_not_followed_to_ssrf_target() {
     circuit.close().await.unwrap();
     net.shutdown().await;
 }
+
+#[tokio::test]
+async fn e2e_client_request_timeout_closes_circuit_and_prevents_reuse_desync() {
+    let net = TestNetwork::start(true, 3_000).await;
+    let slow_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let slow_addr = slow_listener.local_addr().unwrap().to_string();
+    tokio::spawn(async move {
+        if let Ok((mut s, _)) = slow_listener.accept().await {
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf).await;
+            sleep(Duration::from_millis(1_500)).await;
+        }
+    });
+
+    let cfg = ClientConfig {
+        handshake_timeout: Duration::from_secs(2),
+        io_timeout: Duration::from_secs(2),
+        request_timeout: Duration::from_millis(180),
+    };
+    let mut circuit = RelayClient::connect_three_hop(net.route(), cfg)
+        .await
+        .unwrap();
+
+    let err = circuit.send_request(&slow_addr, b"slow").await.unwrap_err();
+    assert!(matches!(
+        err,
+        ClientError::Network(private_relay_network::NetworkError::Timeout(_))
+    ));
+    assert!(circuit.state().is_closed());
+
+    // Reusing the timed-out circuit must fail cleanly locally rather than colliding with Exit state.
+    let reuse_err = circuit
+        .send_request(&slow_addr, b"retry")
+        .await
+        .unwrap_err();
+    assert!(matches!(reuse_err, ClientError::InvalidState(_)));
+
+    sleep(Duration::from_millis(150)).await;
+    assert_eq!(net.entry.active_circuit_count(), 0);
+    assert_eq!(net.middle.active_circuit_count(), 0);
+    assert_eq!(net.exit.active_circuit_count(), 0);
+
+    net.shutdown().await;
+}
