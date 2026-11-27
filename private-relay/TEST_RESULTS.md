@@ -107,9 +107,31 @@
 
 ---
 
-## 5. Deferred Post-`v0.1` Suites
+## 5. Day 6 Rust Probes, Secret Separation & Kubernetes Offline Validation (`2026-11-27`)
+
+| Command / Check | Target | Observed Output | Status |
+| :--- | :--- | :--- | :--- |
+| `cargo fmt --all -- --check` | Full 6-crate workspace | Exit `0` | **Passed** |
+| `cargo clippy --offline --workspace --all-targets -- -D warnings` | Full 6-crate workspace + 6 binaries | Finished `dev` profile (`0` warnings, exit `0`) | **Passed** |
+| `cargo test --offline --workspace` | All 6 workspace crates | **`42 passed; 0 failed; 0 ignored`** (`protocol 10`, `crypto 6`, `network 5`, `relay 6`, `client 10`, `cli 5`) | **Passed** |
+| `docker compose build` + `--help` + `run-docker-demo.ps1 -SkipBuild` | Rebuilt `private-relay:v0.1` (`32.6 MB`) | Advertised `--probe-noise` / `--probe-http`; `12/12` Compose scenarios passed cleanly | **Passed** |
+| `kubectl kustomize k8s/` | `private-relay/k8s/` Kustomize bundle | Exit `0`, rendered `26` YAML documents (`PSS restricted`, zero committed private keys) | **Passed** |
+| `kubectl apply --dry-run=client -k k8s/` | Client-side dry-run & API discovery | Failed on OpenAPI / API group discovery (`couldn't get current server API group list` / `unable to recognize "k8s/": the server has asked for the client to provide credentials`) — no cluster running | **Failed (Cluster Absent)** |
+| Live cluster deploy, E2E Job, Pod failover, & CNI `NetworkPolicy` enforcement | Kubernetes cluster (`private-relay` namespace) | `kubectl cluster-info` unreachable (`KUBECONFIG_EXISTS=False`, Docker Desktop K8s disabled, zero `kind`/`minikube` clusters) | **NOT VERIFIED** |
+
+### Day 6 Tests Added (`40 -> 42` Passed)
+- `crates/network/tests/network_tests.rs`: Added case #7 verifying `private_key_file` loading, `without_inline_secret` omission (`skip_serializing_if = "String::is_empty"`), `read_public_key_from_toml_str`, and mixed inline/file conflict rejection.
+- `crates/cli/tests/cli_tests.rs` (`3 -> 5` passed):
+  - `cli_probe_mode_validation_rejects_ambiguous_flags` — Passed (`--probe-noise`, `--pubkey-toml`, `--probe-http` parsing & mutual-exclusion guards).
+  - `cli_readiness_probes_and_secret_file_separation_e2e` — Passed (full `relay-keygen --split-dirs --key-file-path auto` secretless TOML + `.key` generation, live `demo-dest` `--probe-http` check + closed port failure, live `relay-entry/middle/exit` real `Noise_IK` `--probe-noise` check + wrong-pubkey rejection, and 3-hop E2E HTTP request).
+- Complete Day 6 evidence and Kubernetes operator runbook live in [docs/DAY_6_KUBERNETES_REPORT.md](./docs/DAY_6_KUBERNETES_REPORT.md) and [k8s/README.md](./k8s/README.md).
+
+---
+
+## 6. Deferred Post-`v0.1` Suites
 
 | Suite | Target Phase | Status | Notes |
 | :--- | :--- | :--- | :--- |
-| Multi-host WAN soak benchmarks, Kubernetes & Prometheus | Phase 6–8 | **Not Yet Executed / Deferred** | Local Docker Compose verified (`Day 5`); Kubernetes, Prometheus, and LLM integration remain out of scope |
+| Live Kubernetes deploy, resilience, & CNI `NetworkPolicy` enforcement | Day 6 Live Gate | **NOT VERIFIED** | Requires an active local/CI cluster (`kind`/`minikube`/Docker Desktop K8s) + policy CNI (Calico/Cilium) |
+| Multi-host WAN soak benchmarks & Prometheus | Phase 7–8 | **Not Yet Executed / Deferred** | Prometheus & LLM integration remain out of scope |
 | Fuzzing (`cargo-fuzz`), `cargo-audit` & third-party security audit | Pre-Production | **Not Yet Executed** | `cargo-audit`/`cargo-deny` absent offline; required before any non-research deployment |

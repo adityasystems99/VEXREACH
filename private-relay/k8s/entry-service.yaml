@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: private-relay-entry
+  namespace: private-relay
+  labels:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: entry
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: entry
+  ports:
+    - name: relay-entry
+      port: 9101
+      targetPort: relay-entry
+      protocol: TCP

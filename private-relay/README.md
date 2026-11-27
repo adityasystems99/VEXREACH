@@ -2,14 +2,14 @@
 
 A research-oriented, 3-hop privacy-preserving relay overlay (`Client → Entry → Middle → Exit → Destination`) engineered in Rust with Noise Protocol handshakes and per-hop authenticated encryption.
 
-> **Current Phase:** **Day 5 Complete — `Private-Relay v0.1` Multi-Process & 5-Container Docker Stack Verified (`40/40` tests + Docker Compose E2E)**  
-> **Code Status:** Standalone CLIs (`relay-entry`, `relay-middle`, `relay-exit`, `relay-client`, `demo-dest`, `relay-keygen`), hardened multi-stage [Dockerfile](./Dockerfile) & [docker-compose.yml](./docker-compose.yml), coordinated `Noise_IK` link rekeying (`D-09`), hardened SSRF (`D4-01`), and security/audit reports ([SECURITY_REVIEW.md](./SECURITY_REVIEW.md), [DAY4_VERIFICATION_REPORT.md](./DAY4_VERIFICATION_REPORT.md), [docs/DAY_5_DOCKER_REPORT.md](./docs/DAY_5_DOCKER_REPORT.md)) complete. **Research prototype only — not externally audited or production-ready.**
+> **Current Phase:** **Day 6 Complete (Offline Scope) — `Private-Relay v0.1` Multi-Process, Docker Compose & Hardened Kubernetes Kustomize Manifests Ready (`42/42` Rust tests + Docker E2E verified; Live Cluster Deployment `NOT VERIFIED`)**  
+> **Code Status:** Standalone CLIs (`relay-entry`, `relay-middle`, `relay-exit`, `relay-client` with `--probe`/`--probe-noise`/`--probe-http`, `demo-dest`, `relay-keygen` with `--split-dirs`/`--key-file-path`), hardened multi-stage [Dockerfile](./Dockerfile) & [docker-compose.yml](./docker-compose.yml), hardened Kubernetes Kustomize manifests ([k8s/](./k8s/README.md)), coordinated `Noise_IK` link rekeying (`D-09`), hardened SSRF (`D4-01`), and verification reports ([SECURITY_REVIEW.md](./SECURITY_REVIEW.md), [DAY4_VERIFICATION_REPORT.md](./DAY4_VERIFICATION_REPORT.md), [docs/DAY_5_DOCKER_REPORT.md](./docs/DAY_5_DOCKER_REPORT.md), [docs/DAY_6_KUBERNETES_REPORT.md](./docs/DAY_6_KUBERNETES_REPORT.md)) complete. **Research prototype only — not externally audited or production-ready.**
 
 ---
 
-## Quick Start (Docker Containerized 5-Node Topology & Windows Demo)
+## Quick Start (Docker Containerized 5-Node Topology, Kubernetes & Windows Demo)
 
-Run the isolated 5-container stack (`demo-dest`, `relay-exit`, `relay-middle`, `relay-entry`, one-shot `relay-client`):
+Run the isolated 5-container Docker Compose stack (`demo-dest`, `relay-exit`, `relay-middle`, `relay-entry`, one-shot `relay-client`):
 
 ```powershell
 cd private-relay
@@ -23,6 +23,8 @@ cd private-relay
 .\demo\run-demo.ps1 -AutoStartStop
 ```
 
+For Kubernetes Kustomize deployment (`k8s/`, offline Kustomize verified; live cluster required for deployment), see [k8s/README.md](./k8s/README.md).
+
 See [demo/README.md](./demo/README.md) for manual Docker Compose commands, manual 5-terminal commands, key generation (`relay-keygen`), troubleshooting, and workspace verification (`cargo test --offline --workspace`).
 
 ---
@@ -35,6 +37,7 @@ See [demo/README.md](./demo/README.md) for manual Docker Compose commands, manua
 - [SECURITY_REVIEW.md](./SECURITY_REVIEW.md) — Classified Day 3 internal security review (`Critical`/`High`/`Medium`/`Low`/`Informational`, 16-point inspection, limitations, and external audit gates).
 - [DAY4_VERIFICATION_REPORT.md](./DAY4_VERIFICATION_REPORT.md) — Independent Day 4 engineering audit report (protocol trace, `D4-01`/`D4-02` remediations, live demo PID leak check, & offline dependency/license verification).
 - [docs/DAY_5_DOCKER_REPORT.md](./docs/DAY_5_DOCKER_REPORT.md) — Day 5 multi-stage Docker build, Compose topology, health checks, security audit, and 12-scenario containerized E2E results.
+- [docs/DAY_6_KUBERNETES_REPORT.md](./docs/DAY_6_KUBERNETES_REPORT.md) — Day 6 hardened Kubernetes manifests, Secret-file separation, real `--probe-noise` / `--probe-http` checks, Kustomize verification, and honest `NOT VERIFIED` live-cluster status.
 - [THREAT_MODEL.md](./THREAT_MODEL.md) — Analysis of 9 threat categories + verification tests.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Trust boundaries, RAM state tables, and 6 Mermaid diagrams (architecture, trust zones, circuit build, request flow, response flow, failure teardown).
 

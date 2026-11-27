@@ -230,6 +230,7 @@ fn cli_rejects_missing_config_wrong_role_and_bad_keys() {
         allow_loopback_for_test: false,
         allow_private_targets_for_test: true,
         split_dirs: true,
+        key_file_path: None,
     };
     generate_demo_configs_with_options(
         &split_dir,
@@ -548,4 +549,199 @@ fn multi_process_os_three_hop_demo_and_failure_scenarios() {
             }
         }
     }
+}
+
+#[test]
+fn cli_probe_mode_validation_rejects_ambiguous_flags() {
+    let p_noise = parse_client_args(&[
+        "--probe-noise".into(),
+        "127.0.0.1:9101".into(),
+        "--pubkey-toml".into(),
+        "entry.toml".into(),
+    ])
+    .unwrap();
+    assert_eq!(p_noise.probe_noise_addr.as_deref(), Some("127.0.0.1:9101"));
+    assert_eq!(p_noise.pubkey_toml, Some(PathBuf::from("entry.toml")));
+
+    assert!(parse_client_args(&["--probe-noise".into(), "127.0.0.1:9101".into()]).is_err());
+    assert!(parse_client_args(&["--pubkey-toml".into(), "entry.toml".into()]).is_err());
+
+    let p_http = parse_client_args(&["--probe-http".into(), "127.0.0.1:9000".into()]).unwrap();
+    assert_eq!(p_http.probe_http_addr.as_deref(), Some("127.0.0.1:9000"));
+
+    assert!(parse_client_args(&[
+        "--probe-http".into(),
+        "127.0.0.1:9000".into(),
+        "--config".into(),
+        "client.toml".into()
+    ])
+    .is_err());
+    assert!(parse_client_args(&[
+        "--probe".into(),
+        "127.0.0.1:9101".into(),
+        "--probe-http".into(),
+        "127.0.0.1:9000".into()
+    ])
+    .is_err());
+}
+
+#[test]
+fn cli_readiness_probes_and_secret_file_separation_e2e() {
+    let tmp = TempDirGuard::create("pr_cli_probes_sep");
+    let entry_addr = format!("127.0.0.1:{}", free_loopback_port());
+    let middle_addr = format!("127.0.0.1:{}", free_loopback_port());
+    let exit_addr = format!("127.0.0.1:{}", free_loopback_port());
+    let dest_addr = format!("127.0.0.1:{}", free_loopback_port());
+    let closed_addr = format!("127.0.0.1:{}", free_loopback_port());
+    let out_dir = tmp.0.join("split_secrets");
+
+    let keygen_out = Command::new(env!("CARGO_BIN_EXE_relay-keygen"))
+        .args([
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--entry-addr",
+            &entry_addr,
+            "--middle-addr",
+            &middle_addr,
+            "--exit-addr",
+            &exit_addr,
+            "--allow-target",
+            &dest_addr,
+            "--split-dirs",
+            "--key-file-path",
+            "auto",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        keygen_out.status.success(),
+        "relay-keygen failed: {}",
+        String::from_utf8_lossy(&keygen_out.stderr)
+    );
+
+    for (dir_name, cfg_name, key_name) in [
+        ("entry", "entry.toml", "entry.key"),
+        ("middle", "middle.toml", "middle.key"),
+        ("exit", "exit.toml", "exit.key"),
+    ] {
+        let toml_txt = fs::read_to_string(out_dir.join(dir_name).join(cfg_name)).unwrap();
+        assert!(!toml_txt.contains("private_key_hex"));
+        assert!(toml_txt.contains("private_key_file"));
+        assert!(toml_txt.contains("public_key_hex"));
+        let key_txt = fs::read_to_string(out_dir.join(dir_name).join(key_name)).unwrap();
+        assert_eq!(key_txt.trim().len(), 64);
+        assert!(!toml_txt.contains(key_txt.trim()));
+    }
+
+    let mut children = ChildGuard::new();
+    children.push(
+        Command::new(env!("CARGO_BIN_EXE_demo-dest"))
+            .args(["--listen", &dest_addr])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    children.push(
+        Command::new(env!("CARGO_BIN_EXE_relay-exit"))
+            .args(["--config", out_dir.join("exit/exit.toml").to_str().unwrap()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    children.push(
+        Command::new(env!("CARGO_BIN_EXE_relay-middle"))
+            .args([
+                "--config",
+                out_dir.join("middle/middle.toml").to_str().unwrap(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    children.push(
+        Command::new(env!("CARGO_BIN_EXE_relay-entry"))
+            .args([
+                "--config",
+                out_dir.join("entry/entry.toml").to_str().unwrap(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+
+    wait_tcp_ready(&dest_addr, Duration::from_secs(5));
+    wait_tcp_ready(&exit_addr, Duration::from_secs(5));
+    wait_tcp_ready(&middle_addr, Duration::from_secs(5));
+    wait_tcp_ready(&entry_addr, Duration::from_secs(5));
+
+    // HTTP /health readiness probe succeeds on destination and fails on closed port.
+    let http_ok = Command::new(env!("CARGO_BIN_EXE_relay-client"))
+        .args(["--probe-http", &dest_addr])
+        .output()
+        .unwrap();
+    assert!(
+        http_ok.status.success(),
+        "http probe failed: {}",
+        String::from_utf8_lossy(&http_ok.stderr)
+    );
+    let http_fail = Command::new(env!("CARGO_BIN_EXE_relay-client"))
+        .args(["--probe-http", &closed_addr])
+        .output()
+        .unwrap();
+    assert!(!http_fail.status.success());
+
+    // Noise_IK readiness probe succeeds against matching relay identity and fails on wrong pubkey.
+    for (addr, toml_rel) in [
+        (&entry_addr, "entry/entry.toml"),
+        (&middle_addr, "middle/middle.toml"),
+        (&exit_addr, "exit/exit.toml"),
+    ] {
+        let probe_ok = Command::new(env!("CARGO_BIN_EXE_relay-client"))
+            .args([
+                "--probe-noise",
+                addr,
+                "--pubkey-toml",
+                out_dir.join(toml_rel).to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            probe_ok.status.success(),
+            "noise probe failed for {toml_rel}: {}",
+            String::from_utf8_lossy(&probe_ok.stderr)
+        );
+    }
+
+    let wrong_identity = Command::new(env!("CARGO_BIN_EXE_relay-client"))
+        .args([
+            "--probe-noise",
+            &entry_addr,
+            "--pubkey-toml",
+            out_dir.join("exit/exit.toml").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!wrong_identity.status.success());
+
+    // Full 3-hop request traverses secret-separated relays cleanly.
+    let req_out = Command::new(env!("CARGO_BIN_EXE_relay-client"))
+        .args([
+            "--config",
+            out_dir.join("client/client.toml").to_str().unwrap(),
+            "--url",
+            &format!("http://{dest_addr}/health"),
+            "--print-body",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        req_out.status.success(),
+        "3-hop request through secret-separated relays failed: {}",
+        String::from_utf8_lossy(&req_out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&req_out.stdout).contains("private-relay-demo-dest"));
 }

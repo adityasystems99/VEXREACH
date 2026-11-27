@@ -1,0 +1,186 @@
+# Least-privilege hop-locked Kubernetes NetworkPolicies for Private-Relay.
+# Enforces the exact 3-hop topology at L3/L4 when the cluster runs a NetworkPolicy-capable
+# CNI (e.g., Calico, Cilium, Antrea). Clusters running basic CNIs without policy enforcement
+# (such as default kindnet or flannel) accept these resources but do NOT enforce them at runtime.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: private-relay
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: private-relay
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["entry", "middle", "exit", "client", "keygen"]
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-client-egress-to-entry
+  namespace: private-relay
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: client
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: entry
+      ports:
+        - protocol: TCP
+          port: 9101
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: entry-relay-policy
+  namespace: private-relay
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: entry
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: client
+      ports:
+        - protocol: TCP
+          port: 9101
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: middle
+      ports:
+        - protocol: TCP
+          port: 9102
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: middle-relay-policy
+  namespace: private-relay
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: middle
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: entry
+      ports:
+        - protocol: TCP
+          port: 9102
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: exit
+      ports:
+        - protocol: TCP
+          port: 9103
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exit-relay-policy
+  namespace: private-relay
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: exit
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: middle
+      ports:
+        - protocol: TCP
+          port: 9103
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: destination
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: destination-policy
+  namespace: private-relay
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: destination
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: exit
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keygen-policy
+  namespace: private-relay
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: keygen
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443

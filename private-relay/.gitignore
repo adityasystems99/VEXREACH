@@ -2,4 +2,6 @@ target/
 **/*.rs.bk
 demo/generated/
 demo/logs/
+k8s/generated/
 *.pid
+*.key

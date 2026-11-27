@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: private-relay
+resources:
+  - namespace.yaml
+  - configmaps.yaml
+  - keygen-job.yaml
+  - destination-deployment.yaml
+  - destination-service.yaml
+  - exit-deployment.yaml
+  - exit-service.yaml
+  - middle-deployment.yaml
+  - middle-service.yaml
+  - entry-deployment.yaml
+  - entry-service.yaml
+  - client-job.yaml
+  - network-policy.yaml

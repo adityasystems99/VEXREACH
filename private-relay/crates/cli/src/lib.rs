@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use private_relay_client::{ClientCircuit, ClientConfig, ClientError, RelayClient};
 use private_relay_crypto::StaticKeypair;
-use private_relay_network::{encode_hex, ClientConfigFile, PeerDescriptor, RelayConfig, RelayRole};
+use private_relay_network::{
+    connect_noise_link, encode_hex, ClientConfigFile, PeerDescriptor, RelayConfig, RelayRole,
+};
 use private_relay_protocol::MAX_MESSAGE_BYTES;
 use private_relay_relay::RelayServer;
 use serde::{Deserialize, Serialize};
@@ -324,6 +326,9 @@ pub struct ClientCliArgs {
     pub config_path: PathBuf,
     pub request: Option<ClientRequestSpec>,
     pub probe_addr: Option<String>,
+    pub probe_noise_addr: Option<String>,
+    pub pubkey_toml: Option<PathBuf>,
+    pub probe_http_addr: Option<String>,
     pub log_level: Option<LogLevel>,
     pub check_only: bool,
     pub print_body: bool,
@@ -338,6 +343,9 @@ pub fn parse_client_args(args: &[String]) -> Result<ClientCliArgs, String> {
     let mut data: Option<String> = None;
     let mut data_bytes: Option<usize> = None;
     let mut probe_addr: Option<String> = None;
+    let mut probe_noise_addr: Option<String> = None;
+    let mut pubkey_toml: Option<PathBuf> = None;
+    let mut probe_http_addr: Option<String> = None;
     let mut log_level: Option<LogLevel> = None;
     let mut check_only = false;
     let mut print_body = false;
@@ -350,6 +358,9 @@ pub fn parse_client_args(args: &[String]) -> Result<ClientCliArgs, String> {
                     config_path: PathBuf::new(),
                     request: None,
                     probe_addr: None,
+                    probe_noise_addr: None,
+                    pubkey_toml: None,
+                    probe_http_addr: None,
                     log_level,
                     check_only,
                     print_body,
@@ -362,6 +373,27 @@ pub fn parse_client_args(args: &[String]) -> Result<ClientCliArgs, String> {
                     .get(i)
                     .ok_or_else(|| "relay-client: --probe requires host:port".to_owned())?;
                 probe_addr = Some(val.clone());
+            }
+            "--probe-noise" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or_else(|| "relay-client: --probe-noise requires host:port".to_owned())?;
+                probe_noise_addr = Some(val.clone());
+            }
+            "--pubkey-toml" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or_else(|| "relay-client: --pubkey-toml requires path".to_owned())?;
+                pubkey_toml = Some(PathBuf::from(val));
+            }
+            "--probe-http" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or_else(|| "relay-client: --probe-http requires host:port".to_owned())?;
+                probe_http_addr = Some(val.clone());
             }
             "--config" => {
                 i += 1;
@@ -417,6 +449,19 @@ pub fn parse_client_args(args: &[String]) -> Result<ClientCliArgs, String> {
         i += 1;
     }
 
+    let probe_mode_count = usize::from(probe_addr.is_some())
+        + usize::from(probe_noise_addr.is_some())
+        + usize::from(probe_http_addr.is_some());
+    if probe_mode_count > 1 {
+        return Err(
+            "relay-client: specify at most one of --probe, --probe-noise, or --probe-http"
+                .to_owned(),
+        );
+    }
+    if pubkey_toml.is_some() && probe_noise_addr.is_none() {
+        return Err("relay-client: --pubkey-toml requires --probe-noise <host:port>".to_owned());
+    }
+
     if let Some(probe) = probe_addr {
         if config_path.is_some() || url.is_some() || target.is_some() || check_only {
             return Err(
@@ -428,6 +473,54 @@ pub fn parse_client_args(args: &[String]) -> Result<ClientCliArgs, String> {
             config_path: PathBuf::new(),
             request: None,
             probe_addr: Some(probe),
+            probe_noise_addr: None,
+            pubkey_toml: None,
+            probe_http_addr: None,
+            log_level,
+            check_only: false,
+            print_body: false,
+            show_help: false,
+        });
+    }
+
+    if let Some(noise_addr) = probe_noise_addr {
+        if config_path.is_some() || url.is_some() || target.is_some() || check_only {
+            return Err(
+                "relay-client: --probe-noise cannot be combined with --config, --url, --target, or --check-only"
+                    .to_owned(),
+            );
+        }
+        let pk_toml = pubkey_toml.ok_or_else(|| {
+            "relay-client: --probe-noise requires --pubkey-toml <path>".to_owned()
+        })?;
+        return Ok(ClientCliArgs {
+            config_path: PathBuf::new(),
+            request: None,
+            probe_addr: None,
+            probe_noise_addr: Some(noise_addr),
+            pubkey_toml: Some(pk_toml),
+            probe_http_addr: None,
+            log_level,
+            check_only: false,
+            print_body: false,
+            show_help: false,
+        });
+    }
+
+    if let Some(http_addr) = probe_http_addr {
+        if config_path.is_some() || url.is_some() || target.is_some() || check_only {
+            return Err(
+                "relay-client: --probe-http cannot be combined with --config, --url, --target, or --check-only"
+                    .to_owned(),
+            );
+        }
+        return Ok(ClientCliArgs {
+            config_path: PathBuf::new(),
+            request: None,
+            probe_addr: None,
+            probe_noise_addr: None,
+            pubkey_toml: None,
+            probe_http_addr: Some(http_addr),
             log_level,
             check_only: false,
             print_body: false,
@@ -482,6 +575,9 @@ pub fn parse_client_args(args: &[String]) -> Result<ClientCliArgs, String> {
         config_path,
         request,
         probe_addr: None,
+        probe_noise_addr: None,
+        pubkey_toml: None,
+        probe_http_addr: None,
         log_level,
         check_only,
         print_body,
@@ -587,7 +683,7 @@ pub async fn run_client_cli(args: &[String]) -> ExitCode {
 
     if parsed.show_help {
         println!(
-            "Usage: relay-client (--probe <HOST:PORT> | --config <FILE> (--url <http://host:port/path> | --target <host:port> [--data <STR> | --data-bytes <N>])) [--print-body] [--check-only] [--log-level error|warn|info|debug]"
+            "Usage: relay-client (--probe <HOST:PORT> | --probe-noise <HOST:PORT> --pubkey-toml <FILE> | --probe-http <HOST:PORT> | --config <FILE> (--url <http://host:port/path> | --target <host:port> [--data <STR> | --data-bytes <N>])) [--print-body] [--check-only] [--log-level error|warn|info|debug]"
         );
         return ExitCode::SUCCESS;
     }
@@ -602,6 +698,29 @@ pub async fn run_client_cli(args: &[String]) -> ExitCode {
             Ok(Ok(_)) => return ExitCode::SUCCESS,
             _ => return ExitCode::FAILURE,
         }
+    }
+
+    if let Some(noise_addr) = parsed.probe_noise_addr {
+        let Some(pubkey_toml) = parsed.pubkey_toml else {
+            return ExitCode::FAILURE;
+        };
+        return match run_noise_probe(&noise_addr, &pubkey_toml).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: relay-client noise readiness probe failed: {err}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if let Some(http_addr) = parsed.probe_http_addr {
+        return match run_http_health_probe(&http_addr).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: relay-client http readiness probe failed: {err}");
+                ExitCode::FAILURE
+            }
+        };
     }
 
     init_cli_logger(parsed.log_level);
@@ -987,6 +1106,81 @@ fn parse_http_request_path(line: &str) -> Option<&str> {
     Some(path_full.split('?').next().unwrap_or(path_full))
 }
 
+async fn run_noise_probe(addr: &str, pubkey_toml: &Path) -> Result<(), String> {
+    let raw = fs::read_to_string(pubkey_toml)
+        .map_err(|e| format!("failed to read {}: {e}", pubkey_toml.display()))?;
+    let expected_pub = RelayConfig::read_public_key_from_toml_str(&raw)
+        .map_err(|e| format!("invalid public key TOML {}: {e}", pubkey_toml.display()))?;
+    let ephemeral = StaticKeypair::generate().map_err(|e| e.to_string())?;
+    let (reader, writer) =
+        connect_noise_link(addr, &ephemeral, expected_pub, Duration::from_secs(2))
+            .await
+            .map_err(|e| format!("Noise_IK handshake to {addr} failed: {e}"))?;
+    drop(reader);
+    drop(writer);
+    Ok(())
+}
+
+async fn run_http_health_probe(addr: &str) -> Result<(), String> {
+    let probe_fut = async {
+        let mut stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .map_err(|e| format!("tcp connect to {addr} failed: {e}"))?;
+        let req = format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        stream
+            .write_all(req.as_bytes())
+            .await
+            .map_err(|e| format!("write /health request failed: {e}"))?;
+        stream
+            .shutdown()
+            .await
+            .map_err(|e| format!("half-close /health request failed: {e}"))?;
+        let mut buf = Vec::with_capacity(512);
+        let mut chunk = [0u8; 512];
+        loop {
+            let n = stream
+                .read(&mut chunk)
+                .await
+                .map_err(|e| format!("read /health response failed: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if String::from_utf8_lossy(&buf).contains("\"status\":\"ok\"") || buf.len() >= 2048 {
+                break;
+            }
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let first_line = text.lines().next().unwrap_or("");
+        if !(first_line.starts_with("HTTP/1.1 200") || first_line.starts_with("HTTP/1.0 200")) {
+            return Err(format!("unexpected HTTP status line: '{first_line}'"));
+        }
+        if !text.contains("\"status\":\"ok\"") {
+            return Err("health body missing status=ok marker".to_owned());
+        }
+        Ok(())
+    };
+    tokio::time::timeout(Duration::from_secs(2), probe_fut)
+        .await
+        .map_err(|_| format!("timed out probing http://{addr}/health"))?
+}
+
+fn write_secret_key_file(path: &Path, key_hex: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create secret dir {}: {e}", parent.display()))?;
+    }
+    fs::write(path, format!("{key_hex}\n"))
+        .map_err(|e| format!("failed to write secret file {}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o600);
+        let _ = fs::set_permissions(path, perms);
+    }
+    Ok(())
+}
+
 /// Safe local identity and configuration generator (`relay-keygen`).
 /// Writes fresh runtime TOML configs to `--out-dir` without printing private keys to stdout.
 pub fn run_keygen(args: &[String]) -> ExitCode {
@@ -1002,6 +1196,7 @@ pub fn run_keygen(args: &[String]) -> ExitCode {
     let mut allow_loopback_for_test = true;
     let mut allow_private_targets_for_test = false;
     let mut split_dirs = false;
+    let mut key_file_path: Option<String> = None;
     let mut i = 0;
 
     while i < args.len() {
@@ -1079,6 +1274,18 @@ pub fn run_keygen(args: &[String]) -> ExitCode {
             "--allow-private-targets-for-test" => allow_private_targets_for_test = true,
             "--deny-loopback" => allow_loopback_for_test = false,
             "--split-dirs" => split_dirs = true,
+            "--key-file-path" => {
+                i += 1;
+                let Some(v) = args.get(i) else {
+                    eprintln!("error: relay-keygen: --key-file-path requires path or 'auto'");
+                    return ExitCode::FAILURE;
+                };
+                if v.trim().is_empty() {
+                    eprintln!("error: relay-keygen: --key-file-path must be non-empty");
+                    return ExitCode::FAILURE;
+                }
+                key_file_path = Some(v.clone());
+            }
             "--dest-timeout-ms" => {
                 i += 1;
                 let Some(v) = args.get(i) else {
@@ -1112,6 +1319,7 @@ pub fn run_keygen(args: &[String]) -> ExitCode {
         allow_loopback_for_test,
         allow_private_targets_for_test,
         split_dirs,
+        key_file_path,
     };
 
     match generate_demo_configs_with_options(
@@ -1143,6 +1351,7 @@ pub struct KeygenOptions {
     pub allow_loopback_for_test: bool,
     pub allow_private_targets_for_test: bool,
     pub split_dirs: bool,
+    pub key_file_path: Option<String>,
 }
 
 /// Generates fresh X25519 demo identities and validated TOML configurations inside `out_dir`.
@@ -1161,6 +1370,7 @@ pub fn generate_demo_configs(
         allow_loopback_for_test: true,
         allow_private_targets_for_test: false,
         split_dirs: false,
+        key_file_path: None,
     };
     generate_demo_configs_with_options(
         out_dir,
@@ -1235,6 +1445,45 @@ pub fn generate_demo_configs_with_options(
     );
     entry_cfg.allowed_next_peers = vec![middle_desc.clone()];
     entry_cfg.validate().map_err(|e| e.to_string())?;
+
+    if let Some(ref secret_spec) = opts.key_file_path {
+        let (entry_dir, middle_dir, exit_dir) = if opts.split_dirs {
+            (
+                out_dir.join("entry"),
+                out_dir.join("middle"),
+                out_dir.join("exit"),
+            )
+        } else {
+            (
+                out_dir.to_path_buf(),
+                out_dir.to_path_buf(),
+                out_dir.to_path_buf(),
+            )
+        };
+        let entry_key_disk = entry_dir.join("entry.key");
+        let middle_key_disk = middle_dir.join("middle.key");
+        let exit_key_disk = exit_dir.join("exit.key");
+        write_secret_key_file(&entry_key_disk, &encode_hex(entry_kp.secret_bytes()))?;
+        write_secret_key_file(&middle_key_disk, &encode_hex(middle_kp.secret_bytes()))?;
+        write_secret_key_file(&exit_key_disk, &encode_hex(exit_kp.secret_bytes()))?;
+
+        let (entry_ref, middle_ref, exit_ref) = if secret_spec == "auto" {
+            (
+                entry_key_disk.to_string_lossy().into_owned(),
+                middle_key_disk.to_string_lossy().into_owned(),
+                exit_key_disk.to_string_lossy().into_owned(),
+            )
+        } else {
+            (
+                secret_spec.clone(),
+                secret_spec.clone(),
+                secret_spec.clone(),
+            )
+        };
+        entry_cfg = entry_cfg.without_inline_secret(entry_ref);
+        middle_cfg = middle_cfg.without_inline_secret(middle_ref);
+        exit_cfg = exit_cfg.without_inline_secret(exit_ref);
+    }
 
     let client_cfg = ClientConfigFile {
         entry: entry_desc,

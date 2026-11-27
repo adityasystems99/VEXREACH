@@ -1,0 +1,135 @@
+# Bootstrap non-sensitive TOML skeletons for Private-Relay.
+# IMPORTANT:
+# 1. No real X25519 private keys are committed here.
+# 2. Each relay TOML references private_key_file = "/run/secrets/private_key_hex",
+#    mounted exclusively from that node's own Kubernetes Secret.
+# 3. Run keygen-job (or local relay-keygen + kubectl create configmap/secret) before
+#    relays and client execute with live cryptographic identities.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: private-relay-entry-config
+  namespace: private-relay
+  labels:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: entry
+data:
+  entry.toml: |
+    id = "demo-entry-1"
+    role = "entry"
+    listen_addr = "0.0.0.0:9101"
+    public_key_hex = "0000000000000000000000000000000000000000000000000000000000000000"
+    private_key_file = "/run/secrets/private_key_hex"
+    handshake_timeout_ms = 5000
+    io_timeout_ms = 5000
+    idle_circuit_ttl_secs = 60
+    destination_io_timeout_ms = 5000
+    max_concurrent_connections = 128
+    max_concurrent_circuits = 256
+    max_circuits_per_ip = 32
+    circuit_channel_capacity = 64
+    link_rekey_interval_secs = 3600
+    allow_loopback_for_test = false
+    allow_private_targets_for_test = false
+    allowed_targets = []
+
+    [[allowed_next_peers]]
+    id = "demo-middle-1"
+    role = "middle"
+    addr = "private-relay-middle.private-relay.svc.cluster.local:9102"
+    public_key_hex = "0000000000000000000000000000000000000000000000000000000000000000"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: private-relay-middle-config
+  namespace: private-relay
+  labels:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: middle
+data:
+  middle.toml: |
+    id = "demo-middle-1"
+    role = "middle"
+    listen_addr = "0.0.0.0:9102"
+    public_key_hex = "0000000000000000000000000000000000000000000000000000000000000000"
+    private_key_file = "/run/secrets/private_key_hex"
+    handshake_timeout_ms = 5000
+    io_timeout_ms = 5000
+    idle_circuit_ttl_secs = 60
+    destination_io_timeout_ms = 5000
+    max_concurrent_connections = 128
+    max_concurrent_circuits = 256
+    max_circuits_per_ip = 32
+    circuit_channel_capacity = 64
+    link_rekey_interval_secs = 3600
+    allow_loopback_for_test = false
+    allow_private_targets_for_test = false
+    allowed_targets = []
+
+    [[allowed_next_peers]]
+    id = "demo-exit-1"
+    role = "exit"
+    addr = "private-relay-exit.private-relay.svc.cluster.local:9103"
+    public_key_hex = "0000000000000000000000000000000000000000000000000000000000000000"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: private-relay-exit-config
+  namespace: private-relay
+  labels:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: exit
+data:
+  exit.toml: |
+    id = "demo-exit-1"
+    role = "exit"
+    listen_addr = "0.0.0.0:9103"
+    public_key_hex = "0000000000000000000000000000000000000000000000000000000000000000"
+    private_key_file = "/run/secrets/private_key_hex"
+    handshake_timeout_ms = 5000
+    io_timeout_ms = 5000
+    idle_circuit_ttl_secs = 60
+    destination_io_timeout_ms = 5000
+    max_concurrent_connections = 128
+    max_concurrent_circuits = 256
+    max_circuits_per_ip = 32
+    circuit_channel_capacity = 64
+    link_rekey_interval_secs = 3600
+    allow_loopback_for_test = false
+    allow_private_targets_for_test = true
+    allowed_targets = ["private-relay-destination.private-relay.svc.cluster.local:9000"]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: private-relay-client-config
+  namespace: private-relay
+  labels:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: client
+data:
+  client.toml: |
+    handshake_timeout_ms = 5000
+    io_timeout_ms = 5000
+    request_timeout_ms = 10000
+    link_rekey_interval_secs = 3600
+
+    [entry]
+    id = "demo-entry-1"
+    role = "entry"
+    addr = "private-relay-entry.private-relay.svc.cluster.local:9101"
+    public_key_hex = "0000000000000000000000000000000000000000000000000000000000000000"
+
+    [middle]
+    id = "demo-middle-1"
+    role = "middle"
+    addr = "private-relay-middle.private-relay.svc.cluster.local:9102"
+    public_key_hex = "0000000000000000000000000000000000000000000000000000000000000000"
+
+    [exit]
+    id = "demo-exit-1"
+    role = "exit"
+    addr = "private-relay-exit.private-relay.svc.cluster.local:9103"
+    public_key_hex = "0000000000000000000000000000000000000000000000000000000000000000"

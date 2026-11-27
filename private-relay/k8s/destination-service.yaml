@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: private-relay-destination
+  namespace: private-relay
+  labels:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: destination
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: destination
+  ports:
+    - name: http-dest
+      port: 9000
+      targetPort: http-dest
+      protocol: TCP

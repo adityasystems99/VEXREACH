@@ -510,6 +510,44 @@ fn config_rejects_invalid_roles_mismatched_keys_loop_and_bounds() {
     bad_priv_cfg.allowed_targets = vec!["demo-dest:9000".into()];
     assert!(bad_priv_cfg.validate().is_ok());
 
+    // 7. Secret file separation keeps private keys out of non-sensitive ConfigMap TOMLs.
+    let tmp_key_path = std::env::temp_dir().join(format!(
+        "pr_net_key_{}_{}.hex",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(
+        &tmp_key_path,
+        format!(
+            "{}\n",
+            private_relay_network::encode_hex(kp_exit.secret_bytes())
+        ),
+    )
+    .unwrap();
+    let cfg_no_secret = bad_priv_cfg.without_inline_secret(tmp_key_path.to_string_lossy().as_ref());
+    let cfg_toml = cfg_no_secret.to_toml_string().unwrap();
+    assert!(!cfg_toml.contains(&private_relay_network::encode_hex(kp_exit.secret_bytes())));
+    let extracted_pub = RelayConfig::read_public_key_from_toml_str(&cfg_toml).unwrap();
+    assert_eq!(extracted_pub, *kp_exit.public());
+    let loaded_from_file = RelayConfig::from_toml_str(&cfg_toml).unwrap();
+    assert_eq!(
+        *loaded_from_file.keypair().unwrap().public(),
+        *kp_exit.public()
+    );
+    let both_toml = format!(
+        "private_key_hex = \"{}\"\n{}",
+        private_relay_network::encode_hex(kp_exit.secret_bytes()),
+        cfg_toml
+    );
+    assert!(matches!(
+        RelayConfig::from_toml_str(&both_toml),
+        Err(NetworkError::Config(_))
+    ));
+    let _ = std::fs::remove_file(&tmp_key_path);
+
     // 6. ClientConfigFile rejects role mismatch or duplicate hop keys.
     let mut ccfg = ClientConfigFile {
         entry: PeerDescriptor {

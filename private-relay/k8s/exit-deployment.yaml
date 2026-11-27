@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: private-relay-exit
+  namespace: private-relay
+  labels:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: exit
+spec:
+  # Single replica required in v0.1: each relay Pod pins a unique static X25519 identity
+  # and holds active Noise/onion circuits strictly in local memory.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: private-relay
+      app.kubernetes.io/component: exit
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: private-relay
+        app.kubernetes.io/component: exit
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: relay-exit
+          image: private-relay:v0.1
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/relay-exit"]
+          args: ["--config", "/cfg/exit.toml", "--log-level", "info"]
+          ports:
+            - name: relay-exit
+              containerPort: 9103
+              protocol: TCP
+          startupProbe:
+            exec:
+              command:
+                - /usr/local/bin/relay-client
+                - --probe-noise
+                - 127.0.0.1:9103
+                - --pubkey-toml
+                - /cfg/exit.toml
+            initialDelaySeconds: 1
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 10
+          readinessProbe:
+            exec:
+              command:
+                - /usr/local/bin/relay-client
+                - --probe-noise
+                - 127.0.0.1:9103
+                - --pubkey-toml
+                - /cfg/exit.toml
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/relay-client", "--probe", "127.0.0.1:9103"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: exit-config
+              mountPath: /cfg/exit.toml
+              subPath: exit.toml
+              readOnly: true
+            - name: exit-secret
+              mountPath: /run/secrets/private_key_hex
+              subPath: private_key_hex
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: exit-config
+          configMap:
+            name: private-relay-exit-config
+            defaultMode: 0440
+        - name: exit-secret
+          secret:
+            secretName: private-relay-exit-secret
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Mi

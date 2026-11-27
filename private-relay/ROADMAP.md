@@ -12,10 +12,11 @@
 | Single Rust relay (`CircuitTable`, conn semaphore, bounded queues, SSRF + DNS timeout) | Implemented Prototype (`Day 2–3`) | **Implemented & Tested (`6/6` relay tests)** | Day 3 (`Complete`) |
 | Standalone CLI binaries + 5-process Windows local demo (`demo/`) | Implemented Prototype (`Day 3`) | **Implemented & Tested (`3/3` CLI tests + log proof + `10/10` PS demo)** | Day 3 (`Complete`) |
 | Multi-hop request & response routing (`Client → Entry → Middle → Exit → Dest`) | Implemented Prototype (`Day 2–3`) | **Implemented & Tested (`10/10` client E2E + `3/3` CLI tests)** | Day 3 (`Complete`) |
-| Coordinator registry, operator diversity & failover | Proposed / Deferred | **Deferred** | Phase 5 |
-| Privacy-preserving Prometheus aggregate metrics & K8s | Proposed / Deferred | **Deferred (Excluded from Day 3)** | Phase 6 |
+| Coordinator registry, operator diversity & failover | Proposed / Deferred | **Deferred** | Phase 6B |
+| Privacy-preserving Prometheus aggregate metrics | Proposed / Deferred | **Deferred** | Phase 7 |
 | Adversarial crypto, SSRF & DoS test harness | Proposed / Deferred | **Deferred (`cargo-fuzz`/`cargo-audit` not run)** | Phase 7 |
 | Local Docker Compose 5-container deployment (`v0.1`) | Implemented Prototype (`Day 5`) | **Implemented & Tested (`12/12` container E2E + `private-relay:v0.1`)** | Day 5 (`Complete`) |
+| Hardened Kubernetes Kustomize manifests, Secret separation & Noise/HTTP probes | Implemented Prototype (`Day 6`) | **Manifests & Rust Probes Verified (`kubectl kustomize` + `42/42` tests); Live Cluster `NOT VERIFIED`** | Day 6 (`Partial`) |
 | Multi-host cloud / TLS deployment | Proposed / Deferred | **Deferred (Multi-host WAN/KMS not started)** | Phase 8 |
 | Live backend-connected frontend / LLM operational assistant | Proposed / Deferred | **Deferred (Excluded from Day 3)** | Phase 9 |
 | Sphinx constant-length `N`-hop headers / Cover traffic | Research Extension | **Experimental / Out of Scope for v0.1** | Beyond v0.1 |

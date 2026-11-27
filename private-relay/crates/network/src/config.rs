@@ -53,7 +53,11 @@ pub struct RelayConfig {
     pub role: RelayRole,
     pub listen_addr: String,
     pub public_key_hex: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub private_key_hex: String,
+    /// Optional mounted Secret file holding the 64-hex-char X25519 private key (Kubernetes Secrets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key_file: Option<String>,
     #[serde(default)]
     pub allowed_next_peers: Vec<PeerDescriptor>,
     #[serde(default)]
@@ -129,6 +133,7 @@ impl RelayConfig {
             listen_addr: listen_addr.into(),
             public_key_hex: encode_hex(keypair.public()),
             private_key_hex: encode_hex(keypair.secret_bytes()),
+            private_key_file: None,
             allowed_next_peers: Vec::new(),
             allow_loopback_for_test: false,
             allow_private_targets_for_test: false,
@@ -154,9 +159,49 @@ impl RelayConfig {
     }
 
     pub fn from_toml_str(s: &str) -> Result<Self, NetworkError> {
-        let cfg: Self = toml::from_str(s).map_err(|e| NetworkError::Config(e.to_string()))?;
+        let mut cfg: Self = toml::from_str(s).map_err(|e| NetworkError::Config(e.to_string()))?;
+        cfg.resolve_secret_file()?;
         cfg.validate()?;
         Ok(cfg)
+    }
+
+    /// Reads `private_key_hex` from `private_key_file` when omitted from non-sensitive ConfigMaps.
+    /// Rejects ambiguous configs supplying both `private_key_hex` and `private_key_file`.
+    pub fn resolve_secret_file(&mut self) -> Result<(), NetworkError> {
+        let has_inline = !self.private_key_hex.trim().is_empty();
+        if has_inline && self.private_key_file.is_some() {
+            return Err(NetworkError::Config(
+                "specify either private_key_hex or private_key_file, not both".into(),
+            ));
+        }
+        if !has_inline {
+            if let Some(ref path) = self.private_key_file {
+                let raw = Zeroizing::new(std::fs::read_to_string(path).map_err(|e| {
+                    NetworkError::Config(format!("failed to read private_key_file '{path}': {e}"))
+                })?);
+                self.private_key_hex = raw.trim().to_owned();
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns a cloned non-sensitive configuration referencing `secret_file_path` without inline secrets.
+    pub fn without_inline_secret(&self, secret_file_path: impl Into<String>) -> Self {
+        let mut cloned = self.clone();
+        cloned.private_key_hex = String::new();
+        cloned.private_key_file = Some(secret_file_path.into());
+        cloned
+    }
+
+    /// Extracts and validates only the public X25519 key from a relay TOML string without loading secrets.
+    pub fn read_public_key_from_toml_str(s: &str) -> Result<[u8; X25519_KEY_LEN], NetworkError> {
+        #[derive(Deserialize)]
+        struct PublicOnly {
+            public_key_hex: String,
+        }
+        let parsed: PublicOnly =
+            toml::from_str(s).map_err(|e| NetworkError::Config(e.to_string()))?;
+        decode_hex_32(&parsed.public_key_hex)
     }
 
     pub fn to_toml_string(&self) -> Result<String, NetworkError> {
