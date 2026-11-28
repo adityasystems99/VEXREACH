@@ -167,3 +167,24 @@
 | Nightly `cargo-fuzz` + ASan, 30-min Soak, External Crypto Audit | Out-of-band tooling & extended runs | `cargo-fuzz` absent offline; 30-min soak (`--duration-secs 1800`) deferred | **NOT VERIFIED / BLOCKED** |
 
 Full track reports live in [docs/V02_FUZZING_REPORT.md](./docs/V02_FUZZING_REPORT.md), [docs/V02_CRYPTO_RELIABILITY_REPORT.md](./docs/V02_CRYPTO_RELIABILITY_REPORT.md), [docs/V02_PERFORMANCE_REPORT.md](./docs/V02_PERFORMANCE_REPORT.md), [docs/V02_MULTIREPLICA_ARCHITECTURE.md](./docs/V02_MULTIREPLICA_ARCHITECTURE.md), and [docs/V02_INTEGRATED_ENGINEERING_REPORT.md](./docs/V02_INTEGRATED_ENGINEERING_REPORT.md).
+
+---
+
+## 8. `v0.3` Security Assurance & Operational Hardening Validation (`2026-11-28`)
+
+| Check / Harness | Target | Observed Output | Status Label |
+| :--- | :--- | :--- | :--- |
+| `cargo fmt --all -- --check` & `clippy --all-targets -- -D warnings` | Full 6-crate `v0.3` workspace | Exit `0`, `0` formatting diffs, `0` warnings | **VERIFIED OFFLINE** |
+| `cargo test --offline --workspace` | All 6 workspace crates (`15` test binaries) | **`72 passed; 0 failed; 0 ignored`** (`cli 6`, `client 18`, `crypto 12`, `network 11`, `protocol 15`, `relay 10`) | **VERIFIED OFFLINE** |
+| `cargo check --offline --locked --bins` | Workspace `--locked` build check | Exit `0` | **VERIFIED OFFLINE** |
+| `key_lifecycle_tests` (3 new tests) | `ZeroizingCryptoResolver` drop-scrub counts | `dh_scrubs=2, cipher_scrubs=3, hash_scrubs=1` on completion / wrong-key / truncation abort | **VERIFIED OFFLINE** |
+| `v02_fuzzer -- 400000` (extended adversarial seeds) | 6 fuzz targets; adversarial TOML, HTTP, protocol boundary seeds | **`2,000,048` total execs, `0` failures** | **VERIFIED OFFLINE** |
+| `v02_soak 1800 4` (30-min live soak) | Live 4-worker soak | `50,544` ok, `0` auth failures, `0` circuit leaks, `128,110` rekeys, p50=7.47ms, p95=23.47ms, p99=36.98ms, peak WS ~23.5 MiB | **VERIFIED** (live binary) |
+| Docker fail-closed (missing key / bad TOML / oversized config / RO filesystem) | 4 Docker container scenarios | All exited non-zero with descriptive errors; `EPERM` on write to `/app`/`/cfg` | **VERIFIED** |
+| `run-docker-demo.ps1 -SkipBuild` | 11 Docker Compose integration scenarios | **`11/11` passed** (SSRF ×4, oversized, timeout, 0B, 64KiB, /health, /medium, container lifecycle) | **VERIFIED** |
+| K8s pod kill + recovery (entry/middle/exit) | 3 `kubectl delete pod` scenarios | Graceful `SIGTERM` → `STATUS=STOPPED`; Deployment re-ready in ≤5.34s; Prometheus `up=1` stable | **VERIFIED** |
+| K8s destination scale-to-zero + restore | `kubectl scale --replicas=0/1` | Pod deleted and re-created; `deployment successfully rolled out` | **VERIFIED** |
+| K8s client-pod e2e probes | 5 scenarios (wrong pubkey, /slow, /oversized, SSRF, /health) | `kubectl --overrides` JSON-patch incompatible with kind v1.34.1 | **BLOCKED** |
+| Nightly `cargo-fuzz` + ASan, `cargo-audit`, external audit | Out-of-band tooling | `cargo-fuzz` absent offline; `cargo-audit` advisory DB blocked (TLS) | **NOT VERIFIED / BLOCKED** |
+
+Full track reports: [docs/V03_CRYPTO_KEY_LIFECYCLE_REPORT.md](./docs/V03_CRYPTO_KEY_LIFECYCLE_REPORT.md), [docs/V03_ADVANCED_FUZZING_REPORT.md](./docs/V03_ADVANCED_FUZZING_REPORT.md), [docs/V03_EXTENDED_RELIABILITY_REPORT.md](./docs/V03_EXTENDED_RELIABILITY_REPORT.md), [docs/V03_SUPPLY_CHAIN_SECURITY_REPORT.md](./docs/V03_SUPPLY_CHAIN_SECURITY_REPORT.md), [docs/V03_FAILURE_INJECTION_REPORT.md](./docs/V03_FAILURE_INJECTION_REPORT.md), [docs/V03_MULTIREPLICA_SECURITY_REVIEW.md](./docs/V03_MULTIREPLICA_SECURITY_REVIEW.md), [docs/V03_INTEGRATED_SECURITY_ASSURANCE_REPORT.md](./docs/V03_INTEGRATED_SECURITY_ASSURANCE_REPORT.md).

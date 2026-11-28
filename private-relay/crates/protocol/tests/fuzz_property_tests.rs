@@ -321,3 +321,61 @@ fn property_chunking_reassembly_bounds_ordering_duplicates_and_request_id_isolat
         );
     }
 }
+
+#[test]
+fn adversarial_protocol_boundaries_control_cells_and_allocation_guards() {
+    // Integer boundaries & zero IDs.
+    assert_eq!(CircuitId::new(0), Err(ProtocolError::ZeroCircuitId));
+    assert_eq!(RequestId::new(0), Err(ProtocolError::ZeroRequestId));
+    let max_cid = CircuitId::new(u32::MAX).unwrap();
+
+    // Malformed control messages: Destroy with empty/oversized/unknown reasons, RekeyControl bad magic/epoch/version.
+    for bad_reason in [0x08u8, 0x7F, 0xFF] {
+        let raw = Cell {
+            circuit_id: max_cid,
+            version: 1,
+            command: Command::Destroy,
+            flags: 0,
+            body: vec![bad_reason],
+        };
+        assert!(raw.encode().is_err());
+    }
+    let mut bad_rk = [0u8; OUTER_PLAINTEXT_LEN];
+    bad_rk[0..2].copy_from_slice(&0xFFFFu16.to_be_bytes());
+    bad_rk[2..10].copy_from_slice(b"PR_REKEY");
+    bad_rk[10] = 0x01; // version ok, epoch = 0!
+    assert!(OuterFramePlaintext::unpack_link_frame(&bad_rk).is_err());
+    bad_rk[10] = 0x99; // bad version!
+    bad_rk[18] = 0x01; // epoch = 1
+    assert!(OuterFramePlaintext::unpack_link_frame(&bad_rk).is_err());
+
+    // Excess chunks (141 chunks / empty fragment flood / u16::MAX fragment) rejected before OOM.
+    let rid = RequestId::new(u32::MAX).unwrap();
+    let bad_count = vec![
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        (MAX_CHUNKS_PER_MESSAGE + 1) as u8,
+        InnerFlags::FIRST,
+    ];
+    assert!(matches!(
+        InnerPayload::decode(&bad_count),
+        Err(ProtocolError::InvalidChunkCount { .. })
+    ));
+
+    // Unvalidated struct with out-of-range chunk_index == chunk_count == 140 rejected cleanly.
+    let mut reasm = MessageReassembler::for_request(rid);
+    assert!(reasm
+        .push(InnerPayload {
+            request_id: rid,
+            chunk_index: MAX_CHUNKS_PER_MESSAGE,
+            chunk_count: MAX_CHUNKS_PER_MESSAGE,
+            flags: InnerFlags::from_u8(InnerFlags::FINAL).unwrap(),
+            fragment: vec![b'A'],
+        })
+        .is_err());
+}

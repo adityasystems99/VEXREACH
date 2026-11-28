@@ -44,4 +44,14 @@ fn fuzz_http_response_parser_and_url_invariants() {
     assert!(build_http_request_from_url("http://example.com/ok").is_ok());
     assert!(build_http_request_from_url("http://example.com\nHost: evil").is_err());
     assert!(DestServerConfig::from_toml_str("listen_addr = 'bad'").is_err());
+    assert!(DestServerConfig::from_toml_str(&" ".repeat(600 * 1024)).is_err());
+    assert!(private_relay_cli::parse_client_args(&[
+        "--config".into(),
+        "c.toml".into(),
+        "--target".into(),
+        "example.com:80".into(),
+        "--data-bytes".into(),
+        usize::MAX.to_string(),
+    ])
+    .is_err());
 }

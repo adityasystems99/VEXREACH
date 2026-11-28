@@ -261,6 +261,59 @@ fn cli_rejects_missing_config_wrong_role_and_bad_keys() {
     let exit_split_txt = fs::read_to_string(split_dir.join("exit/exit.toml")).unwrap();
     assert!(exit_split_txt.contains("allow_loopback_for_test = false"));
     assert!(exit_split_txt.contains("allow_private_targets_for_test = true"));
+
+    // 6. Missing/corrupt/mismatched private_key_file and oversized config fail closed cleanly.
+    let keyfile_dir = tmp.0.join("keyfile_checks");
+    let opts_kf = KeygenOptions {
+        entry_listen: "127.0.0.1:0".into(),
+        middle_listen: "127.0.0.1:0".into(),
+        exit_listen: "127.0.0.1:0".into(),
+        allow_loopback_for_test: true,
+        allow_private_targets_for_test: false,
+        split_dirs: false,
+        key_file_path: Some("auto".into()),
+    };
+    generate_demo_configs_with_options(
+        &keyfile_dir,
+        "127.0.0.1:9101",
+        "127.0.0.1:9102",
+        "127.0.0.1:9103",
+        vec!["127.0.0.1:9000".into()],
+        2500,
+        &opts_kf,
+    )
+    .unwrap();
+    let exit_kf_toml = keyfile_dir.join("exit.toml");
+    let exit_key_path = keyfile_dir.join("exit.key");
+    // Overwrite secret file with mismatched key -> X25519 consistency check rejects cleanly.
+    fs::write(&exit_key_path, format!("{}\n", "11".repeat(32))).unwrap();
+    let bad_kf = Command::new(env!("CARGO_BIN_EXE_relay-exit"))
+        .arg("--config")
+        .arg(&exit_kf_toml)
+        .arg("--check-only")
+        .output()
+        .unwrap();
+    assert!(!bad_kf.status.success());
+
+    // Delete key file completely -> missing private_key_file fails cleanly.
+    fs::remove_file(&exit_key_path).unwrap();
+    let missing_kf = Command::new(env!("CARGO_BIN_EXE_relay-exit"))
+        .arg("--config")
+        .arg(&exit_kf_toml)
+        .arg("--check-only")
+        .output()
+        .unwrap();
+    assert!(!missing_kf.status.success());
+
+    // Oversized TOML (> 512 KiB) fails closed in CLI reader.
+    let big_toml = tmp.0.join("huge.toml");
+    fs::write(&big_toml, " ".repeat(600 * 1024)).unwrap();
+    let huge_res = Command::new(env!("CARGO_BIN_EXE_relay-exit"))
+        .arg("--config")
+        .arg(&big_toml)
+        .output()
+        .unwrap();
+    assert!(!huge_res.status.success());
 }
 
 #[test]

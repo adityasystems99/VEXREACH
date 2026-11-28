@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce, Tag};
 use hkdf::Hkdf;
@@ -12,7 +14,9 @@ use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::CryptoError;
-use crate::keys::{StaticKeypair, NOISE_NK_PARAMS};
+use crate::keys::{
+    noise_builder, noise_builder_with_stats, ResolverDropStats, StaticKeypair, NOISE_NK_PARAMS,
+};
 
 /// Domain prologue bound into every telescopic `Noise_NK` hop handshake.
 const HOP_PROLOGUE: &[u8] = b"private-relay-hop-v1";
@@ -29,11 +33,33 @@ pub struct HopHandshakeInitiator {
 impl HopHandshakeInitiator {
     /// Initializes a `Noise_NK` handshake authenticating `hop_static_pub` for `hop_index ∈ {1, 2, 3}`.
     pub fn new(hop_index: u8, hop_static_pub: [u8; X25519_KEY_LEN]) -> Result<Self, CryptoError> {
+        Self::new_inner(hop_index, hop_static_pub, None)
+    }
+
+    /// Test-only constructor tracking `ZeroizingCryptoResolver` teardown counts.
+    #[doc(hidden)]
+    pub fn new_with_drop_stats(
+        hop_index: u8,
+        hop_static_pub: [u8; X25519_KEY_LEN],
+        stats: Arc<ResolverDropStats>,
+    ) -> Result<Self, CryptoError> {
+        Self::new_inner(hop_index, hop_static_pub, Some(stats))
+    }
+
+    fn new_inner(
+        hop_index: u8,
+        hop_static_pub: [u8; X25519_KEY_LEN],
+        stats: Option<Arc<ResolverDropStats>>,
+    ) -> Result<Self, CryptoError> {
         validate_hop_index(hop_index)?;
         let params: snow::params::NoiseParams = NOISE_NK_PARAMS
             .parse()
             .map_err(|_| CryptoError::InvalidKeyMaterial)?;
-        let hs = snow::Builder::new(params)
+        let builder = match stats {
+            Some(s) => noise_builder_with_stats(params, s),
+            None => noise_builder(params),
+        };
+        let hs = builder
             .remote_public_key(&hop_static_pub)
             .prologue(HOP_PROLOGUE)
             .build_initiator()
@@ -51,10 +77,10 @@ impl HopHandshakeInitiator {
 
     /// Generates `Noise_NK` `msg1` (`80B`: `32B e + 32B enc(c_seed) + 16B MAC`).
     pub fn write_msg1(&mut self) -> Result<Vec<u8>, CryptoError> {
-        let mut out = [0u8; 128];
+        let mut out = Zeroizing::new([0u8; 128]);
         let len = self
             .hs
-            .write_message(&*self.c_seed, &mut out)
+            .write_message(&*self.c_seed, &mut *out)
             .map_err(|_| CryptoError::HandshakeFailed)?;
         Ok(out[..len].to_vec())
     }
@@ -86,11 +112,33 @@ pub struct HopHandshakeResponder {
 
 impl HopHandshakeResponder {
     pub fn new(hop_index: u8, local_keypair: &StaticKeypair) -> Result<Self, CryptoError> {
+        Self::new_inner(hop_index, local_keypair, None)
+    }
+
+    /// Test-only constructor tracking `ZeroizingCryptoResolver` teardown counts.
+    #[doc(hidden)]
+    pub fn new_with_drop_stats(
+        hop_index: u8,
+        local_keypair: &StaticKeypair,
+        stats: Arc<ResolverDropStats>,
+    ) -> Result<Self, CryptoError> {
+        Self::new_inner(hop_index, local_keypair, Some(stats))
+    }
+
+    fn new_inner(
+        hop_index: u8,
+        local_keypair: &StaticKeypair,
+        stats: Option<Arc<ResolverDropStats>>,
+    ) -> Result<Self, CryptoError> {
         validate_hop_index(hop_index)?;
         let params: snow::params::NoiseParams = NOISE_NK_PARAMS
             .parse()
             .map_err(|_| CryptoError::InvalidKeyMaterial)?;
-        let hs = snow::Builder::new(params)
+        let builder = match stats {
+            Some(s) => noise_builder_with_stats(params, s),
+            None => noise_builder(params),
+        };
+        let hs = builder
             .local_private_key(local_keypair.secret_bytes())
             .prologue(HOP_PROLOGUE)
             .build_responder()
@@ -116,10 +164,10 @@ impl HopHandshakeResponder {
         let mut r_seed = Zeroizing::new([0u8; SEED_LEN]);
         OsRng.fill_bytes(&mut *r_seed);
 
-        let mut msg2_buf = [0u8; 128];
+        let mut msg2_buf = Zeroizing::new([0u8; 128]);
         let msg2_len = self
             .hs
-            .write_message(&*r_seed, &mut msg2_buf)
+            .write_message(&*r_seed, &mut *msg2_buf)
             .map_err(|_| CryptoError::HandshakeFailed)?;
         if !self.hs.is_handshake_finished() {
             return Err(CryptoError::HandshakeFailed);
@@ -438,7 +486,7 @@ impl ClientCircuitCrypto {
             .seal_prefixed_into(None, &inner_bytes, &mut current)?;
         inner_bytes.zeroize();
 
-        let mut next_buf = Vec::with_capacity(MAX_CELL_BODY_LEN);
+        let mut next_buf = Zeroizing::new(Vec::with_capacity(MAX_CELL_BODY_LEN));
         for hop_idx in (0..target_hop - 1).rev() {
             if current.len() >= MAX_CELL_BODY_LEN {
                 return Err(ProtocolError::PayloadTooLarge {
@@ -452,7 +500,7 @@ impl ClientCircuitCrypto {
                 &current,
                 &mut next_buf,
             )?;
-            std::mem::swap(&mut current, &mut next_buf);
+            std::mem::swap(&mut current, &mut *next_buf);
         }
 
         if current.len() > MAX_CELL_BODY_LEN {

@@ -315,6 +315,14 @@ pub struct MessageReassembler {
     max_total_bytes: usize,
 }
 
+impl Drop for MessageReassembler {
+    fn drop(&mut self) {
+        // Scrub any partial fragments retained when dropped early on error or timeout.
+        self.buffer.fill(0);
+        self.seen_chunks.fill(false);
+    }
+}
+
 impl MessageReassembler {
     /// Creates a request reassembler bounded at `MAX_ENCODED_REQUEST_BYTES` (`65,793` bytes).
     pub fn for_request(request_id: RequestId) -> Self {

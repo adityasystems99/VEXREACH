@@ -10,5 +10,6 @@ pub use hop::{
     ClientCircuitCrypto, HopCipherPair, HopCipherState, HopHandshakeInitiator,
     HopHandshakeResponder,
 };
-pub use keys::{parse_public_key, StaticKeypair};
+pub use keys::{parse_public_key, ResolverDropStats, StaticKeypair};
 pub use link::{LinkInitiator, LinkRekeyPolicy, LinkResponder, LinkSession};
+pub use zeroize::{Zeroize, Zeroizing};

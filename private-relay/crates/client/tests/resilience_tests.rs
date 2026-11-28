@@ -466,3 +466,136 @@ async fn e2e_three_hop_prometheus_metrics_and_privacy_bounds() {
 
     harness.shutdown().await;
 }
+
+/// Track 5 Failure Injection: Entry & Exit restarts mid-request and abrupt client drop cleanup.
+#[tokio::test]
+async fn resilience_entry_exit_restart_mid_request_and_abrupt_client_disconnect() {
+    let dest_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dest_addr = dest_listener.local_addr().unwrap().to_string();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = dest_listener.accept().await {
+            tokio::spawn(async move {
+                let mut b = [0u8; 256];
+                let n = s.read(&mut b).await.unwrap_or(0);
+                if b[..n].starts_with(b"GET /hold") {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                let _ = s
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+            });
+        }
+    });
+
+    let ekp = StaticKeypair::generate().unwrap();
+    let mkp = StaticKeypair::generate().unwrap();
+    let xkp = StaticKeypair::generate().unwrap();
+
+    let mut xcfg =
+        RelayConfig::with_generated_keypair("exit-fi", RelayRole::Exit, "127.0.0.1:0", &xkp);
+    xcfg.allow_loopback_for_test = true;
+    xcfg.allowed_targets = vec![dest_addr.clone()];
+    let xhandle = RelayServer::start(xcfg.clone()).await.unwrap();
+    let xdesc = xhandle.peer_descriptor().clone();
+    xcfg.listen_addr = xhandle.local_addr().to_string();
+
+    let mut mcfg =
+        RelayConfig::with_generated_keypair("mid-fi", RelayRole::Middle, "127.0.0.1:0", &mkp);
+    mcfg.allowed_next_peers = vec![xdesc.clone()];
+    let mhandle = RelayServer::start(mcfg).await.unwrap();
+    let mdesc = mhandle.peer_descriptor().clone();
+
+    let mut ecfg =
+        RelayConfig::with_generated_keypair("ent-fi", RelayRole::Entry, "127.0.0.1:0", &ekp);
+    ecfg.allowed_next_peers = vec![mdesc.clone()];
+    let ehandle = RelayServer::start(ecfg.clone()).await.unwrap();
+    let edesc = ehandle.peer_descriptor().clone();
+    ecfg.listen_addr = ehandle.local_addr().to_string();
+
+    let route = [edesc, mdesc, xdesc];
+    let ccfg = ClientConfig {
+        handshake_timeout: Duration::from_secs(2),
+        io_timeout: Duration::from_secs(2),
+        request_timeout: Duration::from_secs(4),
+    };
+
+    // 1. Abrupt client disconnect (drop open circuit WITHOUT close()): all 3 relays must release slots.
+    let mut abrupt = RelayClient::connect_three_hop(route.clone(), ccfg)
+        .await
+        .unwrap();
+    assert!(abrupt
+        .send_request(&dest_addr, b"GET /pre-drop HTTP/1.1\r\n\r\n")
+        .await
+        .unwrap()
+        .starts_with(b"HTTP/1.1 200 OK"));
+    drop(abrupt);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(ehandle.active_circuit_count(), 0);
+    assert_eq!(mhandle.active_circuit_count(), 0);
+    assert_eq!(xhandle.active_circuit_count(), 0);
+
+    // 2. Exit restart during an active /hold request: client sees failure, restarted Exit recovers cleanly.
+    let mut c_exit = RelayClient::connect_three_hop(route.clone(), ccfg)
+        .await
+        .unwrap();
+    let target_clone = dest_addr.clone();
+    let inflight_exit = tokio::spawn(async move {
+        c_exit
+            .send_request(&target_clone, b"GET /hold HTTP/1.1\r\n\r\n")
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    xhandle.shutdown().await;
+    assert!(inflight_exit.await.unwrap().is_err());
+    assert!(RelayClient::connect_three_hop(route.clone(), ccfg)
+        .await
+        .is_err());
+
+    let xhandle2 = RelayServer::start(xcfg).await.unwrap();
+    let mut c_post_exit = RelayClient::connect_three_hop(route.clone(), ccfg)
+        .await
+        .unwrap();
+    assert!(c_post_exit
+        .send_request(&dest_addr, b"GET /ok-after-exit HTTP/1.1\r\n\r\n")
+        .await
+        .unwrap()
+        .starts_with(b"HTTP/1.1 200 OK"));
+    let _ = c_post_exit.close().await;
+
+    // 3. Entry shutdown during active /hold + Entry restart on same endpoint restores service cleanly.
+    let mut c_entry = RelayClient::connect_three_hop(route.clone(), ccfg)
+        .await
+        .unwrap();
+    let target_clone2 = dest_addr.clone();
+    let inflight_entry = tokio::spawn(async move {
+        c_entry
+            .send_request(&target_clone2, b"GET /hold HTTP/1.1\r\n\r\n")
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    ehandle.shutdown().await;
+    assert!(inflight_entry.await.unwrap().is_err());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(mhandle.active_circuit_count(), 0);
+    assert_eq!(xhandle2.active_circuit_count(), 0);
+
+    let ehandle2 = RelayServer::start(ecfg).await.unwrap();
+    let mut c_post_entry = RelayClient::connect_three_hop(route, ccfg).await.unwrap();
+    assert!(c_post_entry
+        .send_request(&dest_addr, b"GET /ok-after-entry HTTP/1.1\r\n\r\n")
+        .await
+        .unwrap()
+        .starts_with(b"HTTP/1.1 200 OK"));
+    let _ = c_post_entry.close().await;
+
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(ehandle2.active_circuit_count(), 0);
+    assert_eq!(mhandle.active_circuit_count(), 0);
+    assert_eq!(xhandle2.active_circuit_count(), 0);
+
+    ehandle2.shutdown().await;
+    mhandle.shutdown().await;
+    xhandle2.shutdown().await;
+}

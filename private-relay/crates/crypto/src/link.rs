@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use private_relay_protocol::{
@@ -7,10 +8,12 @@ use private_relay_protocol::{
 };
 use rand::rngs::{OsRng, StdRng};
 use rand::{RngCore, SeedableRng};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::CryptoError;
-use crate::keys::{StaticKeypair, NOISE_IK_PARAMS};
+use crate::keys::{
+    noise_builder, noise_builder_with_stats, ResolverDropStats, StaticKeypair, NOISE_IK_PARAMS,
+};
 
 /// Hard safety ceiling on Noise link sequence numbers per epoch window before forced rotation/failure.
 const MAX_LINK_NOISE_NONCE: u64 = 1u64 << 48;
@@ -49,10 +52,32 @@ impl LinkInitiator {
         local_keypair: &StaticKeypair,
         expected_remote_pub: [u8; X25519_KEY_LEN],
     ) -> Result<Self, CryptoError> {
+        Self::new_inner(local_keypair, expected_remote_pub, None)
+    }
+
+    /// Test-only constructor tracking `ZeroizingCryptoResolver` teardown counts.
+    #[doc(hidden)]
+    pub fn new_with_drop_stats(
+        local_keypair: &StaticKeypair,
+        expected_remote_pub: [u8; X25519_KEY_LEN],
+        stats: Arc<ResolverDropStats>,
+    ) -> Result<Self, CryptoError> {
+        Self::new_inner(local_keypair, expected_remote_pub, Some(stats))
+    }
+
+    fn new_inner(
+        local_keypair: &StaticKeypair,
+        expected_remote_pub: [u8; X25519_KEY_LEN],
+        stats: Option<Arc<ResolverDropStats>>,
+    ) -> Result<Self, CryptoError> {
         let params: snow::params::NoiseParams = NOISE_IK_PARAMS
             .parse()
             .map_err(|_| CryptoError::InvalidKeyMaterial)?;
-        let hs = snow::Builder::new(params)
+        let builder = match stats {
+            Some(s) => noise_builder_with_stats(params, s),
+            None => noise_builder(params),
+        };
+        let hs = builder
             .local_private_key(local_keypair.secret_bytes())
             .remote_public_key(&expected_remote_pub)
             .prologue(LINK_PROLOGUE)
@@ -67,36 +92,45 @@ impl LinkInitiator {
 
     /// Generates `Noise_IK` message 1 (`-> e, es, s, ss`).
     pub fn write_msg1(&mut self) -> Result<Vec<u8>, CryptoError> {
-        let mut out = [0u8; 256];
+        let mut out = Zeroizing::new([0u8; 256]);
         let len = self
             .hs
-            .write_message(&[], &mut out)
+            .write_message(&[], &mut *out)
             .map_err(|_| CryptoError::HandshakeFailed)?;
         Ok(out[..len].to_vec())
     }
 
     /// Processes `Noise_IK` message 2 (`<- e, ee, se`), verifies expected peer key, and yields `LinkSession`.
     pub fn finish_with_msg2(mut self, msg2: &[u8]) -> Result<LinkSession, CryptoError> {
-        let mut payload = [0u8; 128];
+        let mut payload = Zeroizing::new([0u8; 128]);
         let len = self
             .hs
-            .read_message(msg2, &mut payload)
+            .read_message(msg2, &mut *payload)
             .map_err(|_| CryptoError::HandshakeFailed)?;
         if len != 0 || !self.hs.is_handshake_finished() {
             return Err(CryptoError::HandshakeFailed);
         }
 
-        let transport = self
+        let mut transport = self
             .hs
             .into_transport_mode()
             .map_err(|_| CryptoError::HandshakeFailed)?;
 
-        let remote_pub = extract_remote_static(&transport)?;
+        let remote_pub = match extract_remote_static(&transport) {
+            Ok(pk) => pk,
+            Err(e) => {
+                let zeros = [0u8; X25519_KEY_LEN];
+                transport.rekey_manually(Some(&zeros), Some(&zeros));
+                return Err(e);
+            }
+        };
         if remote_pub != self.expected_remote_pub {
+            let zeros = [0u8; X25519_KEY_LEN];
+            transport.rekey_manually(Some(&zeros), Some(&zeros));
             return Err(CryptoError::UnexpectedPeerIdentity);
         }
 
-        Ok(LinkSession::new(transport, remote_pub))
+        LinkSession::new(transport, remote_pub)
     }
 }
 
@@ -107,10 +141,30 @@ pub struct LinkResponder {
 
 impl LinkResponder {
     pub fn new(local_keypair: &StaticKeypair) -> Result<Self, CryptoError> {
+        Self::new_inner(local_keypair, None)
+    }
+
+    /// Test-only constructor tracking `ZeroizingCryptoResolver` teardown counts.
+    #[doc(hidden)]
+    pub fn new_with_drop_stats(
+        local_keypair: &StaticKeypair,
+        stats: Arc<ResolverDropStats>,
+    ) -> Result<Self, CryptoError> {
+        Self::new_inner(local_keypair, Some(stats))
+    }
+
+    fn new_inner(
+        local_keypair: &StaticKeypair,
+        stats: Option<Arc<ResolverDropStats>>,
+    ) -> Result<Self, CryptoError> {
         let params: snow::params::NoiseParams = NOISE_IK_PARAMS
             .parse()
             .map_err(|_| CryptoError::InvalidKeyMaterial)?;
-        let hs = snow::Builder::new(params)
+        let builder = match stats {
+            Some(s) => noise_builder_with_stats(params, s),
+            None => noise_builder(params),
+        };
+        let hs = builder
             .local_private_key(local_keypair.secret_bytes())
             .prologue(LINK_PROLOGUE)
             .build_responder()
@@ -123,34 +177,39 @@ impl LinkResponder {
         mut self,
         msg1: &[u8],
     ) -> Result<(Vec<u8>, LinkSession), CryptoError> {
-        let mut payload = [0u8; 128];
+        let mut payload = Zeroizing::new([0u8; 128]);
         let payload_len = self
             .hs
-            .read_message(msg1, &mut payload)
+            .read_message(msg1, &mut *payload)
             .map_err(|_| CryptoError::HandshakeFailed)?;
         if payload_len != 0 {
             return Err(CryptoError::HandshakeFailed);
         }
 
-        let mut msg2_buf = [0u8; 256];
+        let mut msg2_buf = Zeroizing::new([0u8; 256]);
         let msg2_len = self
             .hs
-            .write_message(&[], &mut msg2_buf)
+            .write_message(&[], &mut *msg2_buf)
             .map_err(|_| CryptoError::HandshakeFailed)?;
         if !self.hs.is_handshake_finished() {
             return Err(CryptoError::HandshakeFailed);
         }
 
-        let transport = self
+        let mut transport = self
             .hs
             .into_transport_mode()
             .map_err(|_| CryptoError::HandshakeFailed)?;
-        let remote_pub = extract_remote_static(&transport)?;
+        let remote_pub = match extract_remote_static(&transport) {
+            Ok(pk) => pk,
+            Err(e) => {
+                let zeros = [0u8; X25519_KEY_LEN];
+                transport.rekey_manually(Some(&zeros), Some(&zeros));
+                return Err(e);
+            }
+        };
 
-        Ok((
-            msg2_buf[..msg2_len].to_vec(),
-            LinkSession::new(transport, remote_pub),
-        ))
+        let session = LinkSession::new(transport, remote_pub)?;
+        Ok((msg2_buf[..msg2_len].to_vec(), session))
     }
 }
 
@@ -195,9 +254,12 @@ impl Drop for LinkSession {
 }
 
 impl LinkSession {
-    fn new(transport: snow::TransportState, remote_static_pub: [u8; X25519_KEY_LEN]) -> Self {
-        let pad_rng = StdRng::from_rng(OsRng).unwrap_or_else(|_| StdRng::from_seed([0xA5; 32]));
-        Self {
+    fn new(
+        transport: snow::TransportState,
+        remote_static_pub: [u8; X25519_KEY_LEN],
+    ) -> Result<Self, CryptoError> {
+        let pad_rng = StdRng::from_rng(OsRng).map_err(|_| CryptoError::InvalidKeyMaterial)?;
+        Ok(Self {
             transport,
             remote_static_pub,
             pad_rng,
@@ -208,7 +270,7 @@ impl LinkSession {
             outgoing_rekey_epoch: 0,
             incoming_rekey_epoch: 0,
             failed: false,
-        }
+        })
     }
 
     /// Test helper tightening the link nonce cap (`<= 2^48`) without ever loosening security limits.
@@ -287,17 +349,16 @@ impl LinkSession {
             }
         };
 
-        let mut padding = [0u8; OUTER_PLAINTEXT_LEN];
-        self.pad_rng.fill_bytes(&mut padding);
-        let mut packed = match OuterFramePlaintext::pack_rekey_control(next_epoch, &padding) {
+        let mut padding = Zeroizing::new([0u8; OUTER_PLAINTEXT_LEN]);
+        self.pad_rng.fill_bytes(&mut *padding);
+        let mut packed = match OuterFramePlaintext::pack_rekey_control(next_epoch, &*padding) {
             Ok(p) => p,
             Err(e) => {
-                padding.zeroize();
                 self.failed = true;
                 return Err(e.into());
             }
         };
-        padding.zeroize();
+        drop(padding);
 
         let mut wire = [0u8; OUTER_WIRE_FRAME_BYTES];
         wire[0..TCP_LENGTH_PREFIX_LEN]
@@ -341,14 +402,8 @@ impl LinkSession {
             return Err(CryptoError::SequenceExhausted);
         }
 
-        let mut plain = [0u8; OUTER_PLAINTEXT_LEN];
-        let real_len = match cell.encode_into_slice(&mut plain[OUTER_REAL_LEN_PREFIX_LEN..]) {
-            Ok(len) => len,
-            Err(e) => {
-                plain.zeroize();
-                return Err(e.into());
-            }
-        };
+        let mut plain = Zeroizing::new([0u8; OUTER_PLAINTEXT_LEN]);
+        let real_len = cell.encode_into_slice(&mut plain[OUTER_REAL_LEN_PREFIX_LEN..])?;
         plain[0..OUTER_REAL_LEN_PREFIX_LEN].copy_from_slice(&(real_len as u16).to_be_bytes());
         self.pad_rng
             .fill_bytes(&mut plain[OUTER_REAL_LEN_PREFIX_LEN + real_len..]);
@@ -358,8 +413,8 @@ impl LinkSession {
             .copy_from_slice(&(OUTER_CIPHERTEXT_LEN as u16).to_be_bytes());
         let write_res = self
             .transport
-            .write_message(&plain, &mut wire[TCP_LENGTH_PREFIX_LEN..]);
-        plain.zeroize();
+            .write_message(&*plain, &mut wire[TCP_LENGTH_PREFIX_LEN..]);
+        drop(plain);
         let ct_len = match write_res {
             Ok(len) => len,
             Err(_) => {
@@ -395,18 +450,17 @@ impl LinkSession {
             self.failed = true;
             CryptoError::from(e)
         })?;
-        let mut pt_buf = [0u8; OUTER_PLAINTEXT_LEN];
-        let pt_len = match self.transport.read_message(ciphertext, &mut pt_buf) {
+        let mut pt_buf = Zeroizing::new([0u8; OUTER_PLAINTEXT_LEN]);
+        let pt_len = match self.transport.read_message(ciphertext, &mut *pt_buf) {
             Ok(len) => len,
             Err(_) => {
-                pt_buf.zeroize();
                 self.failed = true;
                 return Err(CryptoError::AuthenticationFailed);
             }
         };
 
         let frame = OuterFramePlaintext::unpack_link_frame(&pt_buf[..pt_len]);
-        pt_buf.zeroize();
+        drop(pt_buf);
 
         let frame = match frame {
             Ok(f) => f,

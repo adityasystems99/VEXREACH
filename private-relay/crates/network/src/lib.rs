@@ -7,7 +7,8 @@ pub mod policy;
 pub mod transport;
 
 pub use config::{
-    decode_hex_32, encode_hex, ClientConfigFile, PeerDescriptor, RelayConfig, RelayRole,
+    decode_hex_32, decode_hex_32_zeroizing, encode_hex, ClientConfigFile, PeerDescriptor,
+    RelayConfig, RelayRole, MAX_CONFIG_TOML_BYTES,
 };
 pub use error::NetworkError;
 pub use metrics::{RelayMetrics, SharedRelayMetrics};

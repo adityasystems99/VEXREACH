@@ -408,6 +408,10 @@ fn main() {
         let seeds = vec![
             valid_cfg.into_bytes(),
             secret_toml_broken.into_bytes(),
+            format!("private_key_hex = \"{canary_secret}\nbroken").into_bytes(),
+            format!("private_key_hex = \"{canary_secret}\\z\"").into_bytes(),
+            format!("private_key_hex = {canary_secret}").into_bytes(),
+            format!("[{canary_secret}\nprivate_key_hex = \"{canary_secret}\"").into_bytes(),
             b"listen_addr = \"127.0.0.1:9000\"\nslow_delay_ms = 500\n".to_vec(),
             b"127.0.0.1:8080".to_vec(),
             b"[::1]:80".to_vec(),

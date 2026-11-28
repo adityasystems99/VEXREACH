@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use private_relay_crypto::{
-    ClientCircuitCrypto, HopHandshakeInitiator, LinkRekeyPolicy, StaticKeypair,
+    ClientCircuitCrypto, HopHandshakeInitiator, LinkRekeyPolicy, StaticKeypair, Zeroize, Zeroizing,
 };
 use private_relay_network::{
     connect_noise_link_with_rekey, ClientConfigFile, LinkReader, LinkWriter, PeerDescriptor,
@@ -254,8 +254,11 @@ impl ClientCircuit {
 
         let mut out_cells = Vec::with_capacity(chunks.len());
         for ch in chunks {
-            let inner = RelayHopPlaintext::Message(ch.encode()?);
+            let mut inner = RelayHopPlaintext::Message(ch.encode()?);
             let sealed = self.crypto.seal_forward_to_hop(3, &inner)?;
+            if let RelayHopPlaintext::Message(ref mut buf) = inner {
+                buf.zeroize();
+            }
             out_cells.push(Cell::new(self.cid, Command::RelayData, 0, sealed)?);
         }
         if let Err(err) = self
@@ -295,7 +298,7 @@ impl ClientCircuit {
                 }
 
                 let inner_bytes = match self.crypto.open_backward_from_hop(3, &cell.body)? {
-                    RelayHopPlaintext::Message(bytes) => bytes,
+                    RelayHopPlaintext::Message(bytes) => Zeroizing::new(bytes),
                     _ => {
                         return Err(ClientError::Protocol(ProtocolError::MalformedPayload(
                             "expected Message plaintext from exit hop",
@@ -303,6 +306,7 @@ impl ClientCircuit {
                     }
                 };
                 let chunk = InnerPayload::decode(&inner_bytes)?;
+                drop(inner_bytes);
                 if req_state == RequestState::AwaitingResponse {
                     req_state.begin_response()?;
                 }

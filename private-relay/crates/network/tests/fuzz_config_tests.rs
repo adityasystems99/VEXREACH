@@ -3,7 +3,8 @@ use std::net::IpAddr;
 
 use private_relay_crypto::StaticKeypair;
 use private_relay_network::{
-    decode_hex_32, encode_hex, ClientConfigFile, DestinationPolicy, RelayConfig, RelayRole,
+    decode_hex_32, decode_hex_32_zeroizing, encode_hex, ClientConfigFile, DestinationPolicy,
+    RelayConfig, RelayRole, MAX_CONFIG_TOML_BYTES,
 };
 
 #[test]
@@ -22,11 +23,61 @@ fn fuzz_regression_toml_parse_errors_never_leak_inline_private_key() {
         "TOML parse error leaked secret material: {msg}"
     );
 
-    // Same guarantee for read_public_key_from_toml_str and ClientConfigFile.
+    // Adversarial malformed TOML variants: unclosed quote around secret, bad escape, integer type mismatch,
+    // secret placed on broken key/comment lines, and missing fields.
+    let pk_hex = encode_hex(kp.public());
+    let adversarial_canaries = [
+        format!("private_key_hex = \"{secret_canary}\nbroken"),
+        format!("private_key_hex = \"{secret_canary}\\z\""),
+        format!("private_key_hex = {secret_canary}"),
+        format!("id = \"e\"\nrole = \"entry\"\nlisten_addr = \"127.0.0.1:9101\"\npublic_key_hex = \"{pk_hex}\"\nprivate_key_hex = 12345 # {secret_canary}"),
+        format!("[{secret_canary}\nprivate_key_hex = \"{secret_canary}\""),
+    ];
+    for case in &adversarial_canaries {
+        let e1 = RelayConfig::from_toml_str(case).unwrap_err().to_string();
+        assert!(
+            !e1.contains(secret_canary),
+            "Adversarial TOML RelayConfig error leaked secret canary: {e1}"
+        );
+        if let Err(e2) = RelayConfig::read_public_key_from_toml_str(case) {
+            assert!(
+                !e2.to_string().contains(secret_canary),
+                "Adversarial TOML read_public_key error leaked secret canary: {e2}"
+            );
+        }
+        let e3 = ClientConfigFile::from_toml_str(case)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !e3.contains(secret_canary),
+            "Adversarial TOML ClientConfigFile error leaked secret canary: {e3}"
+        );
+    }
+
+    // Same guarantee for read_public_key_from_toml_str and ClientConfigFile on base malformed TOML.
     let pk_err = RelayConfig::read_public_key_from_toml_str(&malformed_toml).unwrap_err();
     assert!(!pk_err.to_string().contains(secret_canary));
     let cli_err = ClientConfigFile::from_toml_str(&malformed_toml).unwrap_err();
     assert!(!cli_err.to_string().contains(secret_canary));
+
+    // Oversized configuration (> MAX_CONFIG_TOML_BYTES) is rejected cleanly before TOML parser allocation.
+    let oversized_toml = " ".repeat(MAX_CONFIG_TOML_BYTES + 1);
+    assert!(RelayConfig::from_toml_str(&oversized_toml).is_err());
+    assert!(RelayConfig::read_public_key_from_toml_str(&oversized_toml).is_err());
+    assert!(ClientConfigFile::from_toml_str(&oversized_toml).is_err());
+
+    // Zeroizing decode helper returns exact 32-byte key and without_inline_secret zeroes secret copy.
+    let z = decode_hex_32_zeroizing(secret_canary).unwrap();
+    assert_eq!(z.len(), 32);
+    let mut cfg = RelayConfig::with_generated_keypair("z", RelayRole::Exit, "127.0.0.1:9103", &kp);
+    let stripped = cfg.without_inline_secret("/run/secrets/private_key_hex");
+    assert!(stripped.private_key_hex.is_empty());
+    assert_eq!(
+        stripped.private_key_file.as_deref(),
+        Some("/run/secrets/private_key_hex")
+    );
+    cfg.scrub_private_key();
+    assert!(cfg.private_key_hex.is_empty());
 }
 
 #[test]

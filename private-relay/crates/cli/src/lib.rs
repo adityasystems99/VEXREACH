@@ -4,6 +4,7 @@
 
 use std::fmt;
 use std::fs;
+use std::io::Read;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -13,6 +14,7 @@ use private_relay_client::{ClientCircuit, ClientConfig, ClientError, RelayClient
 use private_relay_crypto::StaticKeypair;
 use private_relay_network::{
     connect_noise_link, encode_hex, ClientConfigFile, PeerDescriptor, RelayConfig, RelayRole,
+    MAX_CONFIG_TOML_BYTES,
 };
 use private_relay_protocol::MAX_MESSAGE_BYTES;
 use private_relay_relay::RelayServer;
@@ -203,6 +205,36 @@ pub fn parse_relay_args(bin_name: &str, args: &[String]) -> Result<RelayCliArgs,
     })
 }
 
+/// Reads a UTF-8 TOML configuration file into a zeroizing buffer while enforcing [`MAX_CONFIG_TOML_BYTES`].
+fn read_bounded_toml_file(path: &Path) -> Result<Zeroizing<String>, String> {
+    let file =
+        fs::File::open(path).map_err(|e| format!("failed to read '{}': {e}", path.display()))?;
+    if let Ok(meta) = file.metadata() {
+        if !meta.is_file() {
+            return Err(format!("'{}' is not a regular file", path.display()));
+        }
+        if meta.len() > MAX_CONFIG_TOML_BYTES as u64 {
+            return Err(format!(
+                "'{}' exceeds {} byte configuration limit",
+                path.display(),
+                MAX_CONFIG_TOML_BYTES
+            ));
+        }
+    }
+    let mut raw = Zeroizing::new(String::new());
+    file.take((MAX_CONFIG_TOML_BYTES + 1) as u64)
+        .read_to_string(&mut raw)
+        .map_err(|e| format!("failed to read '{}': {e}", path.display()))?;
+    if raw.len() > MAX_CONFIG_TOML_BYTES {
+        return Err(format!(
+            "'{}' exceeds {} byte configuration limit",
+            path.display(),
+            MAX_CONFIG_TOML_BYTES
+        ));
+    }
+    Ok(raw)
+}
+
 async fn wait_for_shutdown_signal() {
     #[cfg(unix)]
     {
@@ -252,13 +284,10 @@ pub async fn run_relay_cli(expected_role: RelayRole, bin_name: &str, args: &[Str
 
     init_cli_logger(parsed.log_level);
 
-    let raw_toml = match fs::read_to_string(&parsed.config_path) {
-        Ok(s) => Zeroizing::new(s),
+    let raw_toml = match read_bounded_toml_file(&parsed.config_path) {
+        Ok(s) => s,
         Err(e) => {
-            eprintln!(
-                "error: failed to read config '{}': {e}",
-                parsed.config_path.display()
-            );
+            eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -775,20 +804,21 @@ pub async fn run_client_cli(args: &[String]) -> ExitCode {
 
     init_cli_logger(parsed.log_level);
 
-    let raw_toml = match fs::read_to_string(&parsed.config_path) {
+    let raw_toml = match read_bounded_toml_file(&parsed.config_path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
-                "error: failed to read client config '{}': {e}",
-                parsed.config_path.display()
-            );
+            eprintln!("error: invalid client config: {e}");
             return ExitCode::FAILURE;
         }
     };
 
     let cfg = match ClientConfigFile::from_toml_str(&raw_toml) {
-        Ok(c) => c,
+        Ok(c) => {
+            drop(raw_toml);
+            c
+        }
         Err(e) => {
+            drop(raw_toml);
             eprintln!("error: invalid client configuration: {e}");
             return ExitCode::FAILURE;
         }
@@ -916,6 +946,9 @@ const fn default_slow_delay_ms() -> u64 {
 
 impl DestServerConfig {
     pub fn from_toml_str(s: &str) -> Result<Self, String> {
+        if s.len() > MAX_CONFIG_TOML_BYTES {
+            return Err("destination configuration exceeds 512 KiB limit".to_owned());
+        }
         let cfg: Self = toml::from_str(s).map_err(|e| format!("invalid TOML: {}", e.message()))?;
         cfg.validate()?;
         Ok(cfg)
@@ -969,10 +1002,7 @@ pub async fn run_demo_dest(args: &[String]) -> ExitCode {
     }
 
     let mut cfg = if let Some(path) = config_path {
-        match fs::read_to_string(&path).and_then(|s| {
-            DestServerConfig::from_toml_str(&s)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        }) {
+        match read_bounded_toml_file(&path).and_then(|s| DestServerConfig::from_toml_str(&s)) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("error: invalid destination config: {e}");
@@ -1158,10 +1188,10 @@ pub fn parse_http_request_path(line: &str) -> Option<&str> {
 }
 
 async fn run_noise_probe(addr: &str, pubkey_toml: &Path) -> Result<(), String> {
-    let raw = fs::read_to_string(pubkey_toml)
-        .map_err(|e| format!("failed to read {}: {e}", pubkey_toml.display()))?;
+    let raw = read_bounded_toml_file(pubkey_toml)?;
     let expected_pub = RelayConfig::read_public_key_from_toml_str(&raw)
         .map_err(|e| format!("invalid public key TOML {}: {e}", pubkey_toml.display()))?;
+    drop(raw);
     let ephemeral = StaticKeypair::generate().map_err(|e| e.to_string())?;
     let (reader, writer) =
         connect_noise_link(addr, &ephemeral, expected_pub, Duration::from_secs(2))
@@ -1213,7 +1243,8 @@ fn write_secret_key_file(path: &Path, key_hex: &str) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create secret dir {}: {e}", parent.display()))?;
     }
-    fs::write(path, format!("{key_hex}\n"))
+    let content = Zeroizing::new(format!("{key_hex}\n"));
+    fs::write(path, content.as_bytes())
         .map_err(|e| format!("failed to write secret file {}: {e}", path.display()))?;
     #[cfg(unix)]
     {
@@ -1564,18 +1595,16 @@ pub fn generate_demo_configs_with_options(
         fs::create_dir_all(dir).map_err(|e| format!("create_dir_all: {e}"))?;
     }
 
-    write_config_file(
-        &entry_dir.join("entry.toml"),
-        &entry_cfg.to_toml_string().map_err(|e| e.to_string())?,
-    )?;
-    write_config_file(
-        &middle_dir.join("middle.toml"),
-        &middle_cfg.to_toml_string().map_err(|e| e.to_string())?,
-    )?;
-    write_config_file(
-        &exit_dir.join("exit.toml"),
-        &exit_cfg.to_toml_string().map_err(|e| e.to_string())?,
-    )?;
+    let entry_toml = Zeroizing::new(entry_cfg.to_toml_string().map_err(|e| e.to_string())?);
+    let middle_toml = Zeroizing::new(middle_cfg.to_toml_string().map_err(|e| e.to_string())?);
+    let exit_toml = Zeroizing::new(exit_cfg.to_toml_string().map_err(|e| e.to_string())?);
+    entry_cfg.scrub_private_key();
+    middle_cfg.scrub_private_key();
+    exit_cfg.scrub_private_key();
+
+    write_config_file(&entry_dir.join("entry.toml"), &entry_toml)?;
+    write_config_file(&middle_dir.join("middle.toml"), &middle_toml)?;
+    write_config_file(&exit_dir.join("exit.toml"), &exit_toml)?;
     write_config_file(
         &client_dir.join("client.toml"),
         &client_cfg.to_toml_string().map_err(|e| e.to_string())?,

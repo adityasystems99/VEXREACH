@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use private_relay_crypto::{HopCipherPair, HopHandshakeResponder, StaticKeypair};
+use private_relay_crypto::{HopCipherPair, HopHandshakeResponder, StaticKeypair, Zeroizing};
 use private_relay_network::{
     accept_noise_link_with_rekey, connect_noise_link_with_rekey, DestinationPolicy, LinkReader,
     LinkWriter, NetworkError, PeerDescriptor, RelayConfig, RelayMetrics, RelayRole,
@@ -1270,10 +1270,12 @@ fn decode_extend_directive(
     hop_ciphers: &mut HopCipherPair,
     sealed_body: &[u8],
 ) -> Result<ExtendDirective, DestroyReason> {
-    let pt = hop_ciphers
-        .forward
-        .open(sealed_body)
-        .map_err(|_| DestroyReason::CryptoFail)?;
+    let pt = Zeroizing::new(
+        hop_ciphers
+            .forward
+            .open(sealed_body)
+            .map_err(|_| DestroyReason::CryptoFail)?,
+    );
     let decoded = RelayHopPlaintext::decode(&pt).map_err(|_| DestroyReason::ProtocolError)?;
 
     let dir = match decoded {
@@ -1358,9 +1360,11 @@ fn seal_extended_response(
     hop_ciphers: &mut HopCipherPair,
     created_body: Vec<u8>,
 ) -> Result<Cell, DestroyReason> {
-    let ext_pt = RelayHopPlaintext::Extended(created_body)
-        .encode()
-        .map_err(|_| DestroyReason::ProtocolError)?;
+    let ext_pt = Zeroizing::new(
+        RelayHopPlaintext::Extended(created_body)
+            .encode()
+            .map_err(|_| DestroyReason::ProtocolError)?,
+    );
     let sealed_ext = hop_ciphers
         .backward
         .seal(&ext_pt)
@@ -1392,10 +1396,12 @@ async fn handle_forwarding_upstream_cell(
         _ => return Err(DestroyReason::ProtocolError),
     };
 
-    let pt = hop_ciphers
-        .forward
-        .open(&cell.body)
-        .map_err(|_| DestroyReason::CryptoFail)?;
+    let pt = Zeroizing::new(
+        hop_ciphers
+            .forward
+            .open(&cell.body)
+            .map_err(|_| DestroyReason::CryptoFail)?,
+    );
     let decoded = RelayHopPlaintext::decode(&pt).map_err(|_| DestroyReason::ProtocolError)?;
     let next_body = match decoded {
         RelayHopPlaintext::Forward(inner) => inner,
@@ -1573,7 +1579,7 @@ async fn run_exit_circuit_task(
                                 break;
                             }
                             let pt = match hop_ciphers.forward.open(&cell.body) {
-                                Ok(v) => v,
+                                Ok(v) => Zeroizing::new(v),
                                 Err(_) => {
                                     destroy_reason = DestroyReason::CryptoFail;
                                     notify_upstream_destroy = true;
@@ -1581,13 +1587,14 @@ async fn run_exit_circuit_task(
                                 }
                             };
                             let inner_bytes = match RelayHopPlaintext::decode(&pt) {
-                                Ok(RelayHopPlaintext::Message(bytes)) => bytes,
+                                Ok(RelayHopPlaintext::Message(bytes)) => Zeroizing::new(bytes),
                                 _ => {
                                     destroy_reason = DestroyReason::ProtocolError;
                                     notify_upstream_destroy = true;
                                     break;
                                 }
                             };
+                            drop(pt);
                             let chunk = match InnerPayload::decode(&inner_bytes) {
                                 Ok(c) => c,
                                 Err(_) => {
@@ -1596,6 +1603,7 @@ async fn run_exit_circuit_task(
                                     break;
                                 }
                             };
+                            drop(inner_bytes);
                             if chunk.flags.is_error() {
                                 destroy_reason = DestroyReason::ProtocolError;
                                 notify_upstream_destroy = true;
@@ -1625,6 +1633,7 @@ async fn run_exit_circuit_task(
                             match reasm.push(chunk) {
                                 Ok(None) => {}
                                 Ok(Some(ReassembledMessage::Data(raw_req))) => {
+                                    let raw_req = Zeroizing::new(raw_req);
                                     reassembler = None;
                                     if used_request_order.len() >= 4096 {
                                         if let Some(oldest) = used_request_order.pop_front() {
@@ -1733,19 +1742,27 @@ async fn send_exit_response(
     io_timeout: Duration,
 ) -> Result<(), DestroyReason> {
     let chunks = match result {
-        Ok(body) => chunk_response(rid, &body).map_err(|_| DestroyReason::ProtocolError)?,
+        Ok(body) => {
+            let body = Zeroizing::new(body);
+            chunk_response(rid, &body).map_err(|_| DestroyReason::ProtocolError)?
+        }
         Err(code) => vec![encode_error_payload(rid, code)],
     };
 
     for chunk in chunks {
-        let encoded_inner = chunk.encode().map_err(|_| DestroyReason::ProtocolError)?;
-        let pt = RelayHopPlaintext::Message(encoded_inner)
-            .encode()
-            .map_err(|_| DestroyReason::ProtocolError)?;
+        let encoded_inner =
+            Zeroizing::new(chunk.encode().map_err(|_| DestroyReason::ProtocolError)?);
+        let pt = Zeroizing::new(
+            RelayHopPlaintext::Message(encoded_inner.to_vec())
+                .encode()
+                .map_err(|_| DestroyReason::ProtocolError)?,
+        );
+        drop(encoded_inner);
         let sealed = hop_ciphers
             .backward
             .seal(&pt)
             .map_err(|_| DestroyReason::CryptoFail)?;
+        drop(pt);
         let cell = Cell::new(cid, Command::RelayData, 0, sealed)
             .map_err(|_| DestroyReason::ProtocolError)?;
         up_tx

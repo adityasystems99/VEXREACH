@@ -13,6 +13,9 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::NetworkError;
 
+/// Hard upper bound on serialized TOML configuration size (`512 KiB`) preventing unbounded parser allocations.
+pub const MAX_CONFIG_TOML_BYTES: usize = 512 * 1024;
+
 /// Structural position of a relay node inside the fixed 3-hop topology.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -165,6 +168,11 @@ impl RelayConfig {
     }
 
     pub fn from_toml_str(s: &str) -> Result<Self, NetworkError> {
+        if s.len() > MAX_CONFIG_TOML_BYTES {
+            return Err(NetworkError::Config(
+                "relay configuration TOML exceeds 512 KiB limit".into(),
+            ));
+        }
         let mut cfg: Self =
             toml::from_str(s).map_err(|e| NetworkError::Config(sanitize_toml_error(&e)))?;
         cfg.resolve_secret_file()?;
@@ -226,13 +234,18 @@ impl RelayConfig {
     /// Returns a cloned non-sensitive configuration referencing `secret_file_path` without inline secrets.
     pub fn without_inline_secret(&self, secret_file_path: impl Into<String>) -> Self {
         let mut cloned = self.clone();
-        cloned.private_key_hex = String::new();
+        cloned.private_key_hex.zeroize();
         cloned.private_key_file = Some(secret_file_path.into());
         cloned
     }
 
     /// Extracts and validates only the public X25519 key from a relay TOML string without loading secrets.
     pub fn read_public_key_from_toml_str(s: &str) -> Result<[u8; X25519_KEY_LEN], NetworkError> {
+        if s.len() > MAX_CONFIG_TOML_BYTES {
+            return Err(NetworkError::Config(
+                "relay TOML exceeds 512 KiB limit".into(),
+            ));
+        }
         #[derive(Deserialize)]
         struct PublicOnly {
             public_key_hex: String,
@@ -247,7 +260,7 @@ impl RelayConfig {
     }
 
     pub fn keypair(&self) -> Result<StaticKeypair, NetworkError> {
-        let priv_bytes = Zeroizing::new(decode_hex_32(&self.private_key_hex)?);
+        let priv_bytes = decode_hex_32_zeroizing(&self.private_key_hex)?;
         let pub_bytes = decode_hex_32(&self.public_key_hex)?;
         Ok(StaticKeypair::from_slices(&*priv_bytes, &pub_bytes)?)
     }
@@ -382,6 +395,11 @@ const fn default_request_timeout_ms() -> u64 {
 
 impl ClientConfigFile {
     pub fn from_toml_str(s: &str) -> Result<Self, NetworkError> {
+        if s.len() > MAX_CONFIG_TOML_BYTES {
+            return Err(NetworkError::Config(
+                "client configuration TOML exceeds 512 KiB limit".into(),
+            ));
+        }
         let cfg: Self =
             toml::from_str(s).map_err(|e| NetworkError::Config(sanitize_toml_error(&e)))?;
         cfg.validate()?;
@@ -517,8 +535,10 @@ pub fn encode_hex(bytes: &[u8]) -> String {
     s
 }
 
-/// Decodes a 64-character hex string into a fixed 32-byte key array.
-pub fn decode_hex_32(hex_str: &str) -> Result<[u8; X25519_KEY_LEN], NetworkError> {
+/// Decodes a 64-character hex string into a zeroizing 32-byte key buffer without copying raw secret bytes on return.
+pub fn decode_hex_32_zeroizing(
+    hex_str: &str,
+) -> Result<Zeroizing<[u8; X25519_KEY_LEN]>, NetworkError> {
     let trimmed = hex_str.trim();
     if trimmed.len() != X25519_KEY_LEN * 2 {
         return Err(NetworkError::Config(
@@ -532,6 +552,12 @@ pub fn decode_hex_32(hex_str: &str) -> Result<[u8; X25519_KEY_LEN], NetworkError
         let lo = decode_nibble(bytes[i * 2 + 1])?;
         raw[i] = (hi << 4) | lo;
     }
+    Ok(raw)
+}
+
+/// Decodes a 64-character hex string into a fixed 32-byte key array.
+pub fn decode_hex_32(hex_str: &str) -> Result<[u8; X25519_KEY_LEN], NetworkError> {
+    let raw = decode_hex_32_zeroizing(hex_str)?;
     Ok(parse_public_key(&*raw)?)
 }
 
