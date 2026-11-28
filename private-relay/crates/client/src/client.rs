@@ -252,21 +252,20 @@ impl ClientCircuit {
         let mut req_state = RequestState::Idle;
         req_state.begin_request()?;
 
+        let mut out_cells = Vec::with_capacity(chunks.len());
         for ch in chunks {
             let inner = RelayHopPlaintext::Message(ch.encode()?);
             let sealed = self.crypto.seal_forward_to_hop(3, &inner)?;
-            if let Err(err) = self
-                .writer
-                .send_cell(
-                    &Cell::new(self.cid, Command::RelayData, 0, sealed)?,
-                    self.config.io_timeout,
-                )
-                .await
-            {
-                let _ = self.state.destroy(DestroyReason::PeerDisconnected);
-                let _ = self.writer.shutdown().await;
-                return Err(err.into());
-            }
+            out_cells.push(Cell::new(self.cid, Command::RelayData, 0, sealed)?);
+        }
+        if let Err(err) = self
+            .writer
+            .send_cells_batch(&out_cells, self.config.io_timeout)
+            .await
+        {
+            let _ = self.state.destroy(DestroyReason::PeerDisconnected);
+            let _ = self.writer.shutdown().await;
+            return Err(err.into());
         }
         req_state.finish_request()?;
 

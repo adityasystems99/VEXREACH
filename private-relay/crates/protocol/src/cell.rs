@@ -150,8 +150,8 @@ impl Cell {
         DestroyReason::from_u8(self.body[0])
     }
 
-    /// Encodes the cell cleanly into bytes (`9..=580` bytes).
-    pub fn encode(&self) -> Result<Vec<u8>, ProtocolError> {
+    /// Encodes the cell cleanly into a caller-supplied buffer (`dst.len() >= 9 + body.len()`), returning bytes written.
+    pub fn encode_into_slice(&self, dst: &mut [u8]) -> Result<usize, ProtocolError> {
         if self.version != PROTOCOL_VERSION {
             return Err(ProtocolError::UnsupportedVersion(self.version));
         }
@@ -161,17 +161,34 @@ impl Cell {
                 max: MAX_CELL_BODY_LEN,
             });
         }
+        if self.command == Command::Destroy {
+            let _ = self.destroy_reason()?;
+        }
 
         let total = CELL_HEADER_LEN + self.body.len();
         debug_assert!(total <= MAX_CELL_BYTES);
+        if dst.len() < total {
+            return Err(ProtocolError::InsufficientPadding {
+                needed: total,
+                provided: dst.len(),
+            });
+        }
 
-        let mut out = Vec::with_capacity(total);
-        out.extend_from_slice(&self.circuit_id.get().to_be_bytes());
-        out.push(self.version);
-        out.push(self.command as u8);
-        out.extend_from_slice(&(self.body.len() as u16).to_be_bytes());
-        out.push(self.flags);
-        out.extend_from_slice(&self.body);
+        dst[0..4].copy_from_slice(&self.circuit_id.get().to_be_bytes());
+        dst[4] = self.version;
+        dst[5] = self.command as u8;
+        dst[6..8].copy_from_slice(&(self.body.len() as u16).to_be_bytes());
+        dst[8] = self.flags;
+        dst[9..total].copy_from_slice(&self.body);
+        Ok(total)
+    }
+
+    /// Encodes the cell cleanly into bytes (`9..=580` bytes).
+    pub fn encode(&self) -> Result<Vec<u8>, ProtocolError> {
+        let total = CELL_HEADER_LEN + self.body.len();
+        let mut out = vec![0u8; total.min(MAX_CELL_BYTES)];
+        let written = self.encode_into_slice(&mut out)?;
+        debug_assert_eq!(written, total);
         Ok(out)
     }
 
@@ -345,6 +362,12 @@ impl RelayHopPlaintext {
                 if rest.is_empty() {
                     return Err(ProtocolError::MalformedPayload("empty forwarded envelope"));
                 }
+                if rest.len() >= MAX_CELL_BODY_LEN {
+                    return Err(ProtocolError::PayloadTooLarge {
+                        size: rest.len(),
+                        max: MAX_CELL_BODY_LEN - 1,
+                    });
+                }
                 Ok(Self::Forward(rest.to_vec()))
             }
             RelaySubCommand::Extend => {
@@ -387,6 +410,12 @@ impl RelayHopPlaintext {
                     return Err(ProtocolError::MalformedPayload(
                         "empty inner message payload",
                     ));
+                }
+                if rest.len() >= MAX_CELL_BODY_LEN {
+                    return Err(ProtocolError::PayloadTooLarge {
+                        size: rest.len(),
+                        max: MAX_CELL_BODY_LEN - 1,
+                    });
                 }
                 Ok(Self::Message(rest.to_vec()))
             }

@@ -165,7 +165,8 @@ impl RelayConfig {
     }
 
     pub fn from_toml_str(s: &str) -> Result<Self, NetworkError> {
-        let mut cfg: Self = toml::from_str(s).map_err(|e| NetworkError::Config(e.to_string()))?;
+        let mut cfg: Self =
+            toml::from_str(s).map_err(|e| NetworkError::Config(sanitize_toml_error(&e)))?;
         cfg.resolve_secret_file()?;
         cfg.validate()?;
         Ok(cfg)
@@ -237,7 +238,7 @@ impl RelayConfig {
             public_key_hex: String,
         }
         let parsed: PublicOnly =
-            toml::from_str(s).map_err(|e| NetworkError::Config(e.to_string()))?;
+            toml::from_str(s).map_err(|e| NetworkError::Config(sanitize_toml_error(&e)))?;
         decode_hex_32(&parsed.public_key_hex)
     }
 
@@ -381,7 +382,8 @@ const fn default_request_timeout_ms() -> u64 {
 
 impl ClientConfigFile {
     pub fn from_toml_str(s: &str) -> Result<Self, NetworkError> {
-        let cfg: Self = toml::from_str(s).map_err(|e| NetworkError::Config(e.to_string()))?;
+        let cfg: Self =
+            toml::from_str(s).map_err(|e| NetworkError::Config(sanitize_toml_error(&e)))?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -539,5 +541,18 @@ fn decode_nibble(b: u8) -> Result<u8, NetworkError> {
         b'a'..=b'f' => Ok(b - b'a' + 10),
         b'A'..=b'F' => Ok(b - b'A' + 10),
         _ => Err(NetworkError::Config("invalid hex digit in key".into())),
+    }
+}
+
+/// Formats TOML deserialization failures without echoing source snippets that may contain inline private keys.
+fn sanitize_toml_error(err: &toml::de::Error) -> String {
+    match err.span() {
+        Some(span) => format!(
+            "invalid TOML at bytes {}..{}: {}",
+            span.start,
+            span.end,
+            err.message()
+        ),
+        None => format!("invalid TOML: {}", err.message()),
     }
 }

@@ -24,6 +24,7 @@ use tokio::time::sleep;
 use tracing::field::{Field, Visit};
 use tracing::span;
 use tracing::{Event, Id, Level, Metadata, Subscriber};
+use zeroize::Zeroizing;
 
 /// Runtime verbosity filter for CLI executables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -252,7 +253,7 @@ pub async fn run_relay_cli(expected_role: RelayRole, bin_name: &str, args: &[Str
     init_cli_logger(parsed.log_level);
 
     let raw_toml = match fs::read_to_string(&parsed.config_path) {
-        Ok(s) => s,
+        Ok(s) => Zeroizing::new(s),
         Err(e) => {
             eprintln!(
                 "error: failed to read config '{}': {e}",
@@ -265,10 +266,12 @@ pub async fn run_relay_cli(expected_role: RelayRole, bin_name: &str, args: &[Str
     let mut cfg = match RelayConfig::from_toml_str(&raw_toml) {
         Ok(c) => c,
         Err(e) => {
+            drop(raw_toml);
             eprintln!("error: invalid relay configuration: {e}");
             return ExitCode::FAILURE;
         }
     };
+    drop(raw_toml);
 
     if let Some(listen) = parsed.listen_override {
         cfg.listen_addr = listen;
@@ -679,7 +682,8 @@ fn validate_port_str(port_s: &str) -> Result<u16, String> {
     Ok(p)
 }
 
-fn extract_sanitized_http_status(bytes: &[u8]) -> Option<String> {
+/// Extracts a bounded, control-character-free HTTP/1.x status line from raw response bytes.
+pub fn parse_sanitized_http_status(bytes: &[u8]) -> Option<String> {
     if !bytes.starts_with(b"HTTP/1.") {
         return None;
     }
@@ -693,6 +697,28 @@ fn extract_sanitized_http_status(bytes: &[u8]) -> Option<String> {
         .filter(|c| c.is_ascii_graphic() || *c == ' ')
         .collect::<String>();
     Some(status)
+}
+
+/// Validates an HTTP/1.x `/health` response payload expecting `200` status and `"status":"ok"` marker.
+pub fn parse_http_health_response(bytes: &[u8]) -> Result<(), String> {
+    let text = String::from_utf8_lossy(bytes);
+    let first_line = text.lines().next().unwrap_or("").trim_end_matches('\r');
+    let ok_status = first_line == "HTTP/1.1 200"
+        || first_line.starts_with("HTTP/1.1 200 ")
+        || first_line == "HTTP/1.0 200"
+        || first_line.starts_with("HTTP/1.0 200 ");
+    if !ok_status {
+        return Err(format!("unexpected HTTP status line: '{first_line}'"));
+    }
+    let body_part = text
+        .split_once("\r\n\r\n")
+        .or_else(|| text.split_once("\n\n"))
+        .map(|(_, b)| b)
+        .unwrap_or("");
+    if !body_part.contains("\"status\":\"ok\"") {
+        return Err("health body missing status=ok marker".to_owned());
+    }
+    Ok(())
 }
 
 /// Executes `relay-client` end-to-end and prints sanitized status/byte/timing metadata.
@@ -827,7 +853,7 @@ pub async fn run_client_cli(args: &[String]) -> ExitCode {
         Ok(resp_bytes) => {
             println!("transmission: OK (request_bytes={})", body.len());
             if is_http {
-                let status = extract_sanitized_http_status(&resp_bytes)
+                let status = parse_sanitized_http_status(&resp_bytes)
                     .unwrap_or_else(|| "non-HTTP response".to_owned());
                 println!("outcome: OK (http_status=\"{status}\")");
             } else {
@@ -890,7 +916,7 @@ const fn default_slow_delay_ms() -> u64 {
 
 impl DestServerConfig {
     pub fn from_toml_str(s: &str) -> Result<Self, String> {
-        let cfg: Self = toml::from_str(s).map_err(|e| format!("invalid TOML: {e}"))?;
+        let cfg: Self = toml::from_str(s).map_err(|e| format!("invalid TOML: {}", e.message()))?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -1115,7 +1141,8 @@ async fn handle_demo_dest_bytes(req: &[u8], slow_delay_ms: u64) -> Vec<u8> {
     req.iter().map(|b| b ^ 0x5A).collect()
 }
 
-fn parse_http_request_path(line: &str) -> Option<&str> {
+/// Extracts the normalized request path (without query string) from an HTTP/1.x request line.
+pub fn parse_http_request_path(line: &str) -> Option<&str> {
     let trimmed = line.trim_end_matches('\r');
     let mut parts = trimmed.split_whitespace();
     let method = parts.next()?;
@@ -1174,24 +1201,7 @@ async fn run_http_health_probe(addr: &str) -> Result<(), String> {
                 break;
             }
         }
-        let text = String::from_utf8_lossy(&buf);
-        let first_line = text.lines().next().unwrap_or("").trim_end_matches('\r');
-        let ok_status = first_line == "HTTP/1.1 200"
-            || first_line.starts_with("HTTP/1.1 200 ")
-            || first_line == "HTTP/1.0 200"
-            || first_line.starts_with("HTTP/1.0 200 ");
-        if !ok_status {
-            return Err(format!("unexpected HTTP status line: '{first_line}'"));
-        }
-        let body_part = text
-            .split_once("\r\n\r\n")
-            .or_else(|| text.split_once("\n\n"))
-            .map(|(_, b)| b)
-            .unwrap_or("");
-        if !body_part.contains("\"status\":\"ok\"") {
-            return Err("health body missing status=ok marker".to_owned());
-        }
-        Ok(())
+        parse_http_health_response(&buf)
     };
     tokio::time::timeout(Duration::from_secs(2), probe_fut)
         .await
@@ -1496,9 +1506,12 @@ pub fn generate_demo_configs_with_options(
         let entry_key_disk = entry_dir.join("entry.key");
         let middle_key_disk = middle_dir.join("middle.key");
         let exit_key_disk = exit_dir.join("exit.key");
-        write_secret_key_file(&entry_key_disk, &encode_hex(entry_kp.secret_bytes()))?;
-        write_secret_key_file(&middle_key_disk, &encode_hex(middle_kp.secret_bytes()))?;
-        write_secret_key_file(&exit_key_disk, &encode_hex(exit_kp.secret_bytes()))?;
+        let entry_hex = Zeroizing::new(encode_hex(entry_kp.secret_bytes()));
+        let middle_hex = Zeroizing::new(encode_hex(middle_kp.secret_bytes()));
+        let exit_hex = Zeroizing::new(encode_hex(exit_kp.secret_bytes()));
+        write_secret_key_file(&entry_key_disk, &entry_hex)?;
+        write_secret_key_file(&middle_key_disk, &middle_hex)?;
+        write_secret_key_file(&exit_key_disk, &exit_hex)?;
 
         let (entry_ref, middle_ref, exit_ref) = if secret_spec == "auto" {
             (

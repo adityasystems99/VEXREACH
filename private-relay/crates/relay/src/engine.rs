@@ -299,11 +299,22 @@ impl OutboundLinkHandle {
                         }
                         maybe_cell = rx.recv() => {
                             match maybe_cell {
-                                Some(cell) => {
-                                    if writer.send_cell(&cell, io_timeout).await.is_err() {
+                                Some(first) => {
+                                    let mut batch = vec![first];
+                                    while batch.len() < 32 {
+                                        match rx.try_recv() {
+                                            Ok(next_cell) => batch.push(next_cell),
+                                            Err(_) => break,
+                                        }
+                                    }
+                                    let count = batch.len() as u64;
+                                    if writer.send_cells_batch(&batch, io_timeout).await.is_err() {
                                         break;
                                     }
-                                    rt_w.metrics.add_bytes_sent(private_relay_protocol::OUTER_WIRE_FRAME_BYTES as u64);
+                                    rt_w.metrics.add_sent_frames(
+                                        count,
+                                        count * private_relay_protocol::OUTER_WIRE_FRAME_BYTES as u64,
+                                    );
                                 }
                                 None => break,
                             }
@@ -736,12 +747,22 @@ async fn spawn_inbound_link_loop(
     let rt_w = Arc::clone(&runtime);
     let mut last_tx_epoch = 0u64;
     let writer_handle = tokio::spawn(async move {
-        while let Some(cell) = up_rx.recv().await {
-            if writer.send_cell(&cell, io_timeout).await.is_err() {
+        while let Some(first) = up_rx.recv().await {
+            let mut batch = vec![first];
+            while batch.len() < 32 {
+                match up_rx.try_recv() {
+                    Ok(next_cell) => batch.push(next_cell),
+                    Err(_) => break,
+                }
+            }
+            let count = batch.len() as u64;
+            if writer.send_cells_batch(&batch, io_timeout).await.is_err() {
                 break;
             }
-            rt_w.metrics
-                .add_bytes_sent(private_relay_protocol::OUTER_WIRE_FRAME_BYTES as u64);
+            rt_w.metrics.add_sent_frames(
+                count,
+                count * private_relay_protocol::OUTER_WIRE_FRAME_BYTES as u64,
+            );
             if let Ok((tx_ep, _)) = writer.rekey_epochs() {
                 if tx_ep > last_tx_epoch {
                     for _ in 0..(tx_ep - last_tx_epoch) {
@@ -1767,8 +1788,8 @@ async fn execute_destination_request(
             .map_err(|_| RequestErrorCode::ConnectFailed)?;
         let _ = stream.shutdown().await;
 
-        let mut resp = Vec::new();
-        let mut chunk = [0u8; 4096];
+        let mut resp = Vec::with_capacity(4096);
+        let mut chunk = [0u8; 16_384];
         loop {
             let n = stream
                 .read(&mut chunk)

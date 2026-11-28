@@ -1,9 +1,10 @@
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+use chacha20poly1305::aead::{AeadInPlace, KeyInit};
+use chacha20poly1305::{ChaCha20Poly1305, Nonce, Tag};
 use hkdf::Hkdf;
 use private_relay_protocol::{
-    build_hop_aead_aad, HopDirection, ProtocolError, RelayHopPlaintext, MAX_CELL_BODY_LEN,
-    MAX_CIRCUIT_SEQ, MAX_RELAY_HOPS, NOISE_MAC_LEN, PER_HOP_SEQ_LEN, X25519_KEY_LEN,
+    build_hop_aead_aad, HopDirection, ProtocolError, RelayHopPlaintext, RelaySubCommand,
+    MAX_CELL_BODY_LEN, MAX_CIRCUIT_SEQ, MAX_RELAY_HOPS, NOISE_MAC_LEN, PER_HOP_SEQ_LEN,
+    X25519_KEY_LEN,
 };
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -173,9 +174,12 @@ fn derive_directional_keys(
 }
 
 /// Single directional AEAD state with deterministic `[0,0,0,0] || seq_be` nonce & monotonic FIFO verification.
-#[derive(Zeroize, ZeroizeOnDrop)]
+///
+/// Both `key` and the cached `ChaCha20Poly1305` cipher schedule implement `ZeroizeOnDrop`.
+#[derive(ZeroizeOnDrop)]
 pub struct HopCipherState {
     key: Zeroizing<[u8; KEY_LEN]>,
+    cipher: ChaCha20Poly1305,
     #[zeroize(skip)]
     direction: HopDirection,
     #[zeroize(skip)]
@@ -201,8 +205,11 @@ impl HopCipherState {
         hop_index: u8,
     ) -> Result<Self, CryptoError> {
         validate_hop_index(hop_index)?;
+        let cipher =
+            ChaCha20Poly1305::new_from_slice(&*key).map_err(|_| CryptoError::InvalidKeyMaterial)?;
         Ok(Self {
             key,
+            cipher,
             direction,
             hop_index,
             next_seq: 0,
@@ -213,8 +220,14 @@ impl HopCipherState {
         self.next_seq
     }
 
-    /// Encrypts `plaintext`, prepending `[seq: u64 BE]` ahead of ciphertext + 16B Poly1305 tag.
-    pub fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    /// Seals `[optional_prefix_byte || plaintext]` in-place into `out`, clearing `out` first.
+    /// Avoids intermediate heap allocations per hop.
+    fn seal_prefixed_into(
+        &mut self,
+        prefix_byte: Option<u8>,
+        plaintext: &[u8],
+        out: &mut Vec<u8>,
+    ) -> Result<(), CryptoError> {
         let seq = self.next_seq;
         if seq >= MAX_CIRCUIT_SEQ {
             return Err(CryptoError::SequenceExhausted);
@@ -223,24 +236,40 @@ impl HopCipherState {
         let aad = build_hop_aead_aad(self.direction, self.hop_index, seq)?;
         let nonce_bytes = build_nonce(seq);
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let cipher = ChaCha20Poly1305::new_from_slice(&*self.key)
-            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
 
-        let ciphertext = cipher
-            .encrypt(
-                nonce,
-                Payload {
-                    msg: plaintext,
-                    aad: &aad,
-                },
-            )
-            .map_err(|_| CryptoError::AuthenticationFailed)?;
-
-        self.next_seq = seq + 1;
-
-        let mut out = Vec::with_capacity(PER_HOP_SEQ_LEN + ciphertext.len());
+        let pt_len = plaintext.len() + usize::from(prefix_byte.is_some());
+        let total = PER_HOP_SEQ_LEN + pt_len + NOISE_MAC_LEN;
+        out.clear();
+        if out.capacity() < total {
+            out.reserve(total - out.capacity());
+        }
         out.extend_from_slice(&seq.to_be_bytes());
-        out.extend_from_slice(&ciphertext);
+        if let Some(b) = prefix_byte {
+            out.push(b);
+        }
+        out.extend_from_slice(plaintext);
+
+        let tag = self
+            .cipher
+            .encrypt_in_place_detached(
+                nonce,
+                &aad,
+                &mut out[PER_HOP_SEQ_LEN..PER_HOP_SEQ_LEN + pt_len],
+            )
+            .map_err(|_| {
+                out.zeroize();
+                out.clear();
+                CryptoError::AuthenticationFailed
+            })?;
+        out.extend_from_slice(&tag);
+        self.next_seq = seq + 1;
+        Ok(())
+    }
+
+    /// Encrypts `plaintext`, prepending `[seq: u64 BE]` ahead of ciphertext + 16B Poly1305 tag.
+    pub fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        let mut out = Vec::with_capacity(PER_HOP_SEQ_LEN + plaintext.len() + NOISE_MAC_LEN);
+        self.seal_prefixed_into(None, plaintext, &mut out)?;
         Ok(out)
     }
 
@@ -273,21 +302,62 @@ impl HopCipherState {
         let aad = build_hop_aead_aad(self.direction, self.hop_index, incoming_seq)?;
         let nonce_bytes = build_nonce(incoming_seq);
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let cipher = ChaCha20Poly1305::new_from_slice(&*self.key)
-            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
 
-        let plaintext = cipher
-            .decrypt(
-                nonce,
-                Payload {
-                    msg: &envelope[PER_HOP_SEQ_LEN..],
-                    aad: &aad,
-                },
-            )
-            .map_err(|_| CryptoError::AuthenticationFailed)?;
+        let tag_start = envelope.len() - NOISE_MAC_LEN;
+        let mut plaintext = envelope[PER_HOP_SEQ_LEN..tag_start].to_vec();
+        let tag = Tag::from_slice(&envelope[tag_start..]);
+        if self
+            .cipher
+            .decrypt_in_place_detached(nonce, &aad, &mut plaintext, tag)
+            .is_err()
+        {
+            plaintext.zeroize();
+            return Err(CryptoError::AuthenticationFailed);
+        }
 
         self.next_seq = expected_seq + 1;
         Ok(plaintext)
+    }
+
+    /// Opens `envelope` in-place within `buf`, leaving strictly the decrypted plaintext bytes.
+    fn open_in_place_buf(&mut self, buf: &mut Vec<u8>) -> Result<(), CryptoError> {
+        if buf.len() < PER_HOP_SEQ_LEN + NOISE_MAC_LEN {
+            return Err(CryptoError::AuthenticationFailed);
+        }
+        let incoming_seq = u64::from_be_bytes([
+            buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+        ]);
+        let expected_seq = self.next_seq;
+        if expected_seq >= MAX_CIRCUIT_SEQ {
+            return Err(CryptoError::SequenceExhausted);
+        }
+        if incoming_seq != expected_seq {
+            return Err(CryptoError::SequenceMismatch {
+                expected: expected_seq,
+                actual: incoming_seq,
+            });
+        }
+
+        let aad = build_hop_aead_aad(self.direction, self.hop_index, incoming_seq)?;
+        let nonce_bytes = build_nonce(incoming_seq);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let tag_start = buf.len() - NOISE_MAC_LEN;
+        let mut tag_bytes = [0u8; NOISE_MAC_LEN];
+        tag_bytes.copy_from_slice(&buf[tag_start..]);
+        let tag = Tag::from_slice(&tag_bytes);
+
+        if self
+            .cipher
+            .decrypt_in_place_detached(nonce, &aad, &mut buf[PER_HOP_SEQ_LEN..tag_start], tag)
+            .is_err()
+        {
+            buf.zeroize();
+            return Err(CryptoError::AuthenticationFailed);
+        }
+        buf.copy_within(PER_HOP_SEQ_LEN..tag_start, 0);
+        buf.truncate(tag_start - PER_HOP_SEQ_LEN);
+        self.next_seq = expected_seq + 1;
+        Ok(())
     }
 
     /// Test-only helper enabling adversarial out-of-range sequence exhaustion checks safely.
@@ -361,12 +431,28 @@ impl ClientCircuitCrypto {
             return Err(CryptoError::InvalidState("target hop not yet established"));
         }
 
-        let inner_bytes = inner.encode()?;
-        let mut current = self.hops[target_hop - 1].forward.seal(&inner_bytes)?;
+        let mut inner_bytes = Zeroizing::new(inner.encode()?);
+        let mut current = Vec::with_capacity(MAX_CELL_BODY_LEN);
+        self.hops[target_hop - 1]
+            .forward
+            .seal_prefixed_into(None, &inner_bytes, &mut current)?;
+        inner_bytes.zeroize();
 
+        let mut next_buf = Vec::with_capacity(MAX_CELL_BODY_LEN);
         for hop_idx in (0..target_hop - 1).rev() {
-            let fwd_bytes = RelayHopPlaintext::Forward(current).encode()?;
-            current = self.hops[hop_idx].forward.seal(&fwd_bytes)?;
+            if current.len() >= MAX_CELL_BODY_LEN {
+                return Err(ProtocolError::PayloadTooLarge {
+                    size: current.len(),
+                    max: MAX_CELL_BODY_LEN - 1,
+                }
+                .into());
+            }
+            self.hops[hop_idx].forward.seal_prefixed_into(
+                Some(RelaySubCommand::Forward as u8),
+                &current,
+                &mut next_buf,
+            )?;
+            std::mem::swap(&mut current, &mut next_buf);
         }
 
         if current.len() > MAX_CELL_BODY_LEN {
@@ -390,9 +476,9 @@ impl ClientCircuitCrypto {
             return Err(CryptoError::InvalidState("source hop not yet established"));
         }
 
-        let mut buf = outer_body.to_vec();
+        let mut buf = Zeroizing::new(outer_body.to_vec());
         for hop_idx in 0..source_hop {
-            buf = self.hops[hop_idx].backward.open(&buf)?;
+            self.hops[hop_idx].backward.open_in_place_buf(&mut buf)?;
         }
 
         Ok(RelayHopPlaintext::decode(&buf)?)

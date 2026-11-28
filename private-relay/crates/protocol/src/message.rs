@@ -348,6 +348,12 @@ impl MessageReassembler {
         &mut self,
         chunk: InnerPayload,
     ) -> Result<Option<ReassembledMessage>, ProtocolError> {
+        validate_chunk_metadata(
+            chunk.chunk_index,
+            chunk.chunk_count,
+            chunk.flags,
+            chunk.fragment.len(),
+        )?;
         if chunk.request_id != self.request_id {
             return Err(ProtocolError::RequestIdMismatch {
                 expected: self.request_id.get(),

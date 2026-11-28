@@ -12,9 +12,10 @@
 | Single Rust relay (`CircuitTable`, conn semaphore, bounded queues, SSRF + DNS timeout) | Implemented Prototype (`Day 2–3`) | **Implemented & Tested (`6/6` relay tests)** | Day 3 (`Complete`) |
 | Standalone CLI binaries + 5-process Windows local demo (`demo/`) | Implemented Prototype (`Day 3`) | **Implemented & Tested (`3/3` CLI tests + log proof + `10/10` PS demo)** | Day 3 (`Complete`) |
 | Multi-hop request & response routing (`Client → Entry → Middle → Exit → Dest`) | Implemented Prototype (`Day 2–3`) | **Implemented & Tested (`10/10` client E2E + `3/3` CLI tests)** | Day 3 (`Complete`) |
-| Coordinator registry, operator diversity & failover | Proposed / Deferred | **Deferred** | Phase 11 |
-| Privacy-preserving Prometheus aggregate metrics & Grafana | Implemented Prototype (`Day 10`) | **Implemented & Tested (`metrics_tests` + live Prometheus `v2.53.0` + 10-panel Grafana `11.1.0`)** | Day 10 (`Complete`) |
-| Adversarial crypto, SSRF & DoS test harness | Security Audit (`Day 7` + `Day 9`) | **Partial (`SEC-701`–`SEC-709` + `resilience_tests.rs`; `cargo-fuzz`/`cargo-audit` not run)** | Day 7–9 (`Verified Offline Tools`) |
+| Coordinator registry, operator diversity & failover | `v0.2` Option B+D Isolated 6-Node Prototype + Architecture Proposal | **Prototype `VERIFIED OFFLINE`; K8s Coordinator `PROPOSED`** | `v0.2` Track 4 (`Future Phase 11+`) |
+| Privacy-preserving Prometheus aggregate metrics & Grafana | Implemented Prototype (`Day 10` + `v0.2` batch frame fix) | **Implemented & Tested (`metrics_tests` + live Prometheus `v2.53.0` + 10-panel Grafana `11.1.0`)** | Day 10 (`Complete`) |
+| Adversarial crypto, fuzzing, soak & DoS harness | Security & Reliability (`Day 7` + `v0.2` Tracks 1–2) | **Native Mutation Fuzzing (`1,000,044` execs), 10 Rekey Stress Cases & `300.17s` Soak `VERIFIED OFFLINE`; Nightly ASan `cargo-fuzz`/`cargo-audit` `BLOCKED`/`NOT VERIFIED`** | `v0.2` Tracks 1–2 (`Complete Offline`) |
+| Performance benchmarking & hot-path optimization | Performance (`v0.2` Track 3) | **Implemented & Measured (`+2.53x` concurrent `64 KiB`, `v02_benchmark.rs`) `VERIFIED OFFLINE`** | `v0.2` Track 3 (`Complete`) |
 | Local Docker Compose 5-container deployment (`v0.1`) | Implemented Prototype (`Day 5–10`) | **Implemented & Tested (`12/12` container E2E + `private-relay:v0.1`)** | Day 5–10 (`Complete`) |
 | Hardened Kubernetes Kustomize manifests, Secret separation & Noise/HTTP probes | Implemented Prototype (`Day 6–9`) | **Implemented & Tested Live (`kind v1.32.2` + `Calico v3.29.1`, `6/6` Deployments, `12/12` traffic, `15/15` CNI policies, Pod restarts)** | Day 8–9 (`Complete`) |
 | Multi-host cloud / TLS deployment | Proposed / Deferred | **Deferred (Multi-host WAN/KMS not started)** | Phase 11+ |

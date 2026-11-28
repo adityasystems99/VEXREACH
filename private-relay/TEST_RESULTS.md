@@ -147,5 +147,23 @@
 | Scope | Status | Notes |
 | :--- | :--- | :--- |
 | Audit, Deployment, Resilience & Observability Reports | **Complete** | [docs/DAY_7_SECURITY_AUDIT.md](./docs/DAY_7_SECURITY_AUDIT.md), [docs/DAY_8_DEPLOYMENT_REPORT.md](./docs/DAY_8_DEPLOYMENT_REPORT.md), [docs/DAY_9_RESILIENCE_REPORT.md](./docs/DAY_9_RESILIENCE_REPORT.md), [docs/DAY_10_OBSERVABILITY_REPORT.md](./docs/DAY_10_OBSERVABILITY_REPORT.md), [docs/DAY_8_10_INTEGRATED_REPORT.md](./docs/DAY_8_10_INTEGRATED_REPORT.md) |
-| Multi-host WAN soak benchmarks & Coordinator Discovery | **Deferred (`Phase 11+`)** | Single-replica per-Pod relay architecture per `KI-10` |
-| Fuzzing (`cargo-fuzz`), `cargo-audit` & third-party security audit | **NOT VERIFIED** | `cargo-audit`/`cargo-deny` absent offline; required before any non-research deployment |
+| Multi-host WAN soak benchmarks & Coordinator Discovery | **Deferred (`Phase 11+`)** | Single-replica per-Pod relay architecture per `KI-10`; isolated 6-node prototype verified in `v0.2` |
+| Fuzzing (`cargo-fuzz` nightly), `cargo-audit` & third-party security audit | **NOT VERIFIED (`BLOCKED` offline)** | `cargo-fuzz`/nightly/`cargo-audit` absent offline; native offline `--release` mutation fuzzer (`1,000,044` execs) verified below |
+
+---
+
+## 7. `v0.2` Advanced Systems Engineering Validation (`2026-11-28`)
+
+| Check / Harness | Target | Observed Output | Status Label |
+| :--- | :--- | :--- | :--- |
+| `cargo fmt --all -- --check` & `clippy --all-targets -- -D warnings` | Full 6-crate `v0.2` workspace | Exit `0`, `0` formatting diffs, `0` warnings; `cargo check --offline --locked --bins` exit `0` | **VERIFIED OFFLINE** |
+| `cargo test --offline --workspace` | All 6 workspace crates (`14` test binaries) | **`67 passed; 0 failed; 0 ignored`** (`protocol 14`, `crypto 9`, `network 11`, `relay 10`, `client 17` incl. `multireplica_prototype_tests`, `cli 6`) | **VERIFIED OFFLINE** |
+| `v02_fuzzer -- 200000` (after fixes) | All 6 fuzz targets (`target_1`..`target_6`) | Baseline caught 295 failures (`56` hop bound + `239` TOML canary leak); post-fix rerun hit **`1,000,044` execs, `0` panics, `0` invariant failures** | **VERIFIED OFFLINE** |
+| `rekey_stress_tests` & `rekey_transport_tests` | All 10 Track 2.2 Noise/TCP rekey scenarios | Exact threshold, bidirectional concurrency, >300 rotations, corrupt/lost/reordered fail-closed, flood DoS (`>4`), `2^48` & `2^32` ceilings | **VERIFIED OFFLINE** |
+| `v02_soak 300 4` (Paced 5-min Soak) | Live 3-hop `Entry->Middle->Exit->Dest` | `300.17s`, `23,700` ok requests, `118` SSRF blocks, `0` unexpected errs, `60,075` live rekeys, `0` auth failures, `16.50->22.37 MiB` WS, `post_circuits=(0,0,0)` | **VERIFIED OFFLINE** |
+| `v02_benchmark` (Before vs. After) | Micro + Direct-vs-3-Hop Macrobenchmarks | `3hop_concurrent_8w 64KiB`: `13.05->33.02 MiB/s` (`+2.53x`); `3hop_sustained_5s`: `427.6->686.9 rps` (`+60.6%`); CPU `42.23->31.17s` | **VERIFIED OFFLINE** |
+| `docker compose build` + `run-docker-demo.ps1 -SkipBuild` | Rebuilt `private-relay:v0.1` (`v0.2` bins) + Compose E2E | **`12/12` container scenarios passed**, `circuit_hops=12`, clean `SIGTERM` teardown | **VERIFIED** |
+| Live `kind` (`v1.32.2` + Calico `v3.29.1`) Regression | Updated `v0.2` image imported & rolled out across 4 Deployments | `/health` `17ms`, `/max-64kib` `21ms`, `169.254.169.254` `PolicyDenied` `12ms`, `sum(private_relay_up)=3`, `6/6` Pods `1/1 Running` (`0` restarts) | **VERIFIED** |
+| Nightly `cargo-fuzz` + ASan, 30-min Soak, External Crypto Audit | Out-of-band tooling & extended runs | `cargo-fuzz` absent offline; 30-min soak (`--duration-secs 1800`) deferred | **NOT VERIFIED / BLOCKED** |
+
+Full track reports live in [docs/V02_FUZZING_REPORT.md](./docs/V02_FUZZING_REPORT.md), [docs/V02_CRYPTO_RELIABILITY_REPORT.md](./docs/V02_CRYPTO_RELIABILITY_REPORT.md), [docs/V02_PERFORMANCE_REPORT.md](./docs/V02_PERFORMANCE_REPORT.md), [docs/V02_MULTIREPLICA_ARCHITECTURE.md](./docs/V02_MULTIREPLICA_ARCHITECTURE.md), and [docs/V02_INTEGRATED_ENGINEERING_REPORT.md](./docs/V02_INTEGRATED_ENGINEERING_REPORT.md).

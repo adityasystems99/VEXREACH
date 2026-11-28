@@ -154,8 +154,12 @@ impl RelayMetrics {
     }
 
     pub fn add_bytes_sent(&self, bytes: u64) {
+        self.add_sent_frames(1, bytes);
+    }
+
+    pub fn add_sent_frames(&self, frames: u64, bytes: u64) {
         self.bytes_sent_total.fetch_add(bytes, Ordering::Relaxed);
-        self.frames_sent_total.fetch_add(1, Ordering::Relaxed);
+        self.frames_sent_total.fetch_add(frames, Ordering::Relaxed);
     }
 
     pub fn inc_cells_processed(&self) {

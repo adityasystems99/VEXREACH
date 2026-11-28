@@ -170,7 +170,7 @@ impl<W: AsyncWrite + Unpin> LinkWriter<W> {
             guard.seal_rekey_and_rotate()?
         };
         let mut wg = SessionFailGuard::arm(&self.session);
-        write_frame_with_timeout(&mut self.writer, &rekey_wire, io_timeout).await?;
+        write_bytes_with_timeout(&mut self.writer, &rekey_wire, io_timeout).await?;
         wg.disarm();
         Ok(())
     }
@@ -196,7 +196,7 @@ impl<W: AsyncWrite + Unpin> LinkWriter<W> {
 
         if let Some(rekey_wire) = maybe_rekey {
             let mut wg = SessionFailGuard::arm(&self.session);
-            write_frame_with_timeout(&mut self.writer, &rekey_wire, io_timeout).await?;
+            write_bytes_with_timeout(&mut self.writer, &rekey_wire, io_timeout).await?;
             wg.disarm();
         }
 
@@ -209,7 +209,41 @@ impl<W: AsyncWrite + Unpin> LinkWriter<W> {
         };
 
         let mut wg = SessionFailGuard::arm(&self.session);
-        write_frame_with_timeout(&mut self.writer, &wire, io_timeout).await?;
+        write_bytes_with_timeout(&mut self.writer, &wire, io_timeout).await?;
+        wg.disarm();
+        Ok(())
+    }
+
+    /// Seals multiple queued `Cell`s into consecutive `600`-byte Noise frames (enforcing per-frame
+    /// key rotation thresholds) and writes them in one coalesced I/O operation.
+    pub async fn send_cells_batch(
+        &mut self,
+        cells: &[Cell],
+        io_timeout: Duration,
+    ) -> Result<(), NetworkError> {
+        if cells.is_empty() {
+            return Ok(());
+        }
+        if cells.len() == 1 {
+            return self.send_cell(&cells[0], io_timeout).await;
+        }
+        let mut wire_buf = Vec::with_capacity(cells.len() * OUTER_WIRE_FRAME_BYTES);
+        {
+            let mut guard = self
+                .session
+                .lock()
+                .map_err(|_| NetworkError::PolicyDenied("session mutex poisoned".into()))?;
+            for cell in cells {
+                if guard.should_rekey_outgoing() {
+                    let rk = guard.seal_rekey_and_rotate()?;
+                    wire_buf.extend_from_slice(&rk);
+                }
+                let frame = guard.seal_cell(cell)?;
+                wire_buf.extend_from_slice(&frame);
+            }
+        }
+        let mut wg = SessionFailGuard::arm(&self.session);
+        write_bytes_with_timeout(&mut self.writer, &wire_buf, io_timeout).await?;
         wg.disarm();
         Ok(())
     }
@@ -219,9 +253,9 @@ impl<W: AsyncWrite + Unpin> LinkWriter<W> {
     }
 }
 
-async fn write_frame_with_timeout<W: AsyncWrite + Unpin>(
+async fn write_bytes_with_timeout<W: AsyncWrite + Unpin>(
     writer: &mut W,
-    wire: &[u8; OUTER_WIRE_FRAME_BYTES],
+    wire: &[u8],
     io_timeout: Duration,
 ) -> Result<(), NetworkError> {
     match timeout(io_timeout, write_all_and_flush(writer, wire)).await {

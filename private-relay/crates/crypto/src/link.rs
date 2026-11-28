@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
 use private_relay_protocol::{
-    decode_wire_record, encode_wire_record, Cell, LinkFrame, OuterFramePlaintext,
-    LINK_REKEY_DEFAULT_BYTES, LINK_REKEY_DEFAULT_INTERVAL_SECS, MAX_CELL_BYTES,
-    OUTER_CIPHERTEXT_LEN, OUTER_PLAINTEXT_LEN, OUTER_WIRE_FRAME_BYTES, X25519_KEY_LEN,
+    decode_wire_record, Cell, LinkFrame, OuterFramePlaintext, LINK_REKEY_DEFAULT_BYTES,
+    LINK_REKEY_DEFAULT_INTERVAL_SECS, OUTER_CIPHERTEXT_LEN, OUTER_PLAINTEXT_LEN,
+    OUTER_REAL_LEN_PREFIX_LEN, OUTER_WIRE_FRAME_BYTES, TCP_LENGTH_PREFIX_LEN, X25519_KEY_LEN,
 };
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::{OsRng, StdRng};
+use rand::{RngCore, SeedableRng};
 use zeroize::Zeroize;
 
 use crate::error::CryptoError;
@@ -173,7 +173,9 @@ fn extract_remote_static(
 pub struct LinkSession {
     transport: snow::TransportState,
     remote_static_pub: [u8; X25519_KEY_LEN],
+    pad_rng: StdRng,
     rekey_policy: LinkRekeyPolicy,
+    nonce_limit: u64,
     last_rekey_at: Instant,
     bytes_since_rekey: u64,
     outgoing_rekey_epoch: u64,
@@ -181,18 +183,44 @@ pub struct LinkSession {
     failed: bool,
 }
 
+impl Drop for LinkSession {
+    fn drop(&mut self) {
+        // Upstream `snow::TransportState` does not zeroize its internal `CipherChaChaPoly.key` buffers
+        // on Drop; overwrite both directional Noise keys with zeros explicitly before deallocation.
+        let zeros = [0u8; X25519_KEY_LEN];
+        self.transport.rekey_manually(Some(&zeros), Some(&zeros));
+        self.pad_rng = StdRng::from_seed([0u8; 32]);
+        self.failed = true;
+    }
+}
+
 impl LinkSession {
     fn new(transport: snow::TransportState, remote_static_pub: [u8; X25519_KEY_LEN]) -> Self {
+        let pad_rng = StdRng::from_rng(OsRng).unwrap_or_else(|_| StdRng::from_seed([0xA5; 32]));
         Self {
             transport,
             remote_static_pub,
+            pad_rng,
             rekey_policy: LinkRekeyPolicy::default(),
+            nonce_limit: MAX_LINK_NOISE_NONCE,
             last_rekey_at: Instant::now(),
             bytes_since_rekey: 0,
             outgoing_rekey_epoch: 0,
             incoming_rekey_epoch: 0,
             failed: false,
         }
+    }
+
+    /// Test helper tightening the link nonce cap (`<= 2^48`) without ever loosening security limits.
+    #[doc(hidden)]
+    pub fn set_nonce_limit_for_test(&mut self, limit: u64) {
+        self.nonce_limit = limit.min(MAX_LINK_NOISE_NONCE);
+    }
+
+    /// Test helper advancing `snow`'s inbound nonce for adversarial `2^48` boundary verification.
+    #[doc(hidden)]
+    pub fn set_receiving_nonce_for_test(&mut self, nonce: u64) {
+        self.transport.set_receiving_nonce(nonce);
     }
 
     /// Configures periodic time and byte thresholds governing automatic outgoing rekey triggers.
@@ -230,14 +258,14 @@ impl LinkSession {
         self.transport.receiving_nonce()
     }
 
-    /// Returns `true` when transmitting another cell would reach or exceed configured thresholds.
+    /// Returns `true` when transmitting another cell would reach or exceed configured thresholds
+    /// while remaining below the hard link nonce ceiling (`nonce < nonce_limit`).
     pub fn should_rekey_outgoing(&self) -> bool {
-        if self.failed {
+        if self.failed || self.transport.sending_nonce() >= self.nonce_limit {
             return false;
         }
         self.bytes_since_rekey >= self.rekey_policy.max_bytes
             || self.last_rekey_at.elapsed() >= self.rekey_policy.max_age
-            || self.transport.sending_nonce() >= MAX_LINK_NOISE_NONCE
     }
 
     /// Emits an encrypted `RekeyControl` frame under the current outgoing key and atomically calls
@@ -246,6 +274,10 @@ impl LinkSession {
     pub fn seal_rekey_and_rotate(&mut self) -> Result<[u8; OUTER_WIRE_FRAME_BYTES], CryptoError> {
         if self.failed {
             return Err(CryptoError::InvalidState("link session failed closed"));
+        }
+        if self.transport.sending_nonce() >= self.nonce_limit {
+            self.failed = true;
+            return Err(CryptoError::SequenceExhausted);
         }
         let next_epoch = match self.outgoing_rekey_epoch.checked_add(1) {
             Some(v) => v,
@@ -256,8 +288,8 @@ impl LinkSession {
         };
 
         let mut padding = [0u8; OUTER_PLAINTEXT_LEN];
-        OsRng.fill_bytes(&mut padding);
-        let packed = match OuterFramePlaintext::pack_rekey_control(next_epoch, &padding) {
+        self.pad_rng.fill_bytes(&mut padding);
+        let mut packed = match OuterFramePlaintext::pack_rekey_control(next_epoch, &padding) {
             Ok(p) => p,
             Err(e) => {
                 padding.zeroize();
@@ -267,8 +299,14 @@ impl LinkSession {
         };
         padding.zeroize();
 
-        let mut ct_buf = [0u8; OUTER_CIPHERTEXT_LEN];
-        let ct_len = match self.transport.write_message(&packed.bytes, &mut ct_buf) {
+        let mut wire = [0u8; OUTER_WIRE_FRAME_BYTES];
+        wire[0..TCP_LENGTH_PREFIX_LEN]
+            .copy_from_slice(&(OUTER_CIPHERTEXT_LEN as u16).to_be_bytes());
+        let write_res = self
+            .transport
+            .write_message(&packed.bytes, &mut wire[TCP_LENGTH_PREFIX_LEN..]);
+        packed.bytes.zeroize();
+        let ct_len = match write_res {
             Ok(len) => len,
             Err(_) => {
                 self.failed = true;
@@ -289,35 +327,40 @@ impl LinkSession {
         self.bytes_since_rekey = 0;
         self.last_rekey_at = Instant::now();
 
-        encode_wire_record(&ct_buf).map_err(|e| {
-            self.failed = true;
-            CryptoError::from(e)
-        })
+        Ok(wire)
     }
 
-    /// Packs `cell` with OS CSPRNG padding into `582B`, Noise-encrypts to `598B`, and frames to `600B`.
+    /// Packs `cell` with CSPRNG padding into `582B` without heap allocation, Noise-encrypts to `598B`,
+    /// and frames directly into `600B` wire output.
     pub fn seal_cell(&mut self, cell: &Cell) -> Result<[u8; OUTER_WIRE_FRAME_BYTES], CryptoError> {
         if self.failed {
             return Err(CryptoError::InvalidState("link session failed closed"));
         }
-        if self.transport.sending_nonce() >= MAX_LINK_NOISE_NONCE {
+        if self.transport.sending_nonce() >= self.nonce_limit {
             self.failed = true;
             return Err(CryptoError::SequenceExhausted);
         }
 
-        let mut padding = [0u8; MAX_CELL_BYTES];
-        OsRng.fill_bytes(&mut padding);
-        let packed = match OuterFramePlaintext::pack(cell, &padding) {
-            Ok(p) => p,
+        let mut plain = [0u8; OUTER_PLAINTEXT_LEN];
+        let real_len = match cell.encode_into_slice(&mut plain[OUTER_REAL_LEN_PREFIX_LEN..]) {
+            Ok(len) => len,
             Err(e) => {
-                padding.zeroize();
+                plain.zeroize();
                 return Err(e.into());
             }
         };
-        padding.zeroize();
+        plain[0..OUTER_REAL_LEN_PREFIX_LEN].copy_from_slice(&(real_len as u16).to_be_bytes());
+        self.pad_rng
+            .fill_bytes(&mut plain[OUTER_REAL_LEN_PREFIX_LEN + real_len..]);
 
-        let mut ct_buf = [0u8; OUTER_CIPHERTEXT_LEN];
-        let ct_len = match self.transport.write_message(&packed.bytes, &mut ct_buf) {
+        let mut wire = [0u8; OUTER_WIRE_FRAME_BYTES];
+        wire[0..TCP_LENGTH_PREFIX_LEN]
+            .copy_from_slice(&(OUTER_CIPHERTEXT_LEN as u16).to_be_bytes());
+        let write_res = self
+            .transport
+            .write_message(&plain, &mut wire[TCP_LENGTH_PREFIX_LEN..]);
+        plain.zeroize();
+        let ct_len = match write_res {
             Ok(len) => len,
             Err(_) => {
                 self.failed = true;
@@ -335,7 +378,7 @@ impl LinkSession {
             .bytes_since_rekey
             .saturating_add(OUTER_WIRE_FRAME_BYTES as u64);
 
-        Ok(encode_wire_record(&ct_buf)?)
+        Ok(wire)
     }
 
     /// Validates a `600`-byte TCP frame record, Noise-decrypts to `582B`, handles any `RekeyControl`
@@ -344,7 +387,7 @@ impl LinkSession {
         if self.failed {
             return Err(CryptoError::InvalidState("link session failed closed"));
         }
-        if self.transport.receiving_nonce() >= MAX_LINK_NOISE_NONCE {
+        if self.transport.receiving_nonce() >= self.nonce_limit {
             self.failed = true;
             return Err(CryptoError::SequenceExhausted);
         }
