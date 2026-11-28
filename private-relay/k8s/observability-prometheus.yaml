@@ -1,3 +1,60 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: private-relay-entry-metrics
+  namespace: private-relay
+  labels:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: entry
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: entry
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: private-relay-middle-metrics
+  namespace: private-relay
+  labels:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: middle
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: middle
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: private-relay-exit-metrics
+  namespace: private-relay
+  labels:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: exit
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: private-relay
+    app.kubernetes.io/component: exit
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: metrics
+      protocol: TCP
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,6 +62,7 @@ metadata:
   namespace: private-relay
   labels:
     app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: prometheus
     app.kubernetes.io/part-of: private-relay
 spec:
   replicas: 1
@@ -13,12 +71,16 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: prometheus
+      app.kubernetes.io/component: prometheus
   template:
     metadata:
       labels:
         app.kubernetes.io/name: prometheus
+        app.kubernetes.io/component: prometheus
         app.kubernetes.io/part-of: private-relay
     spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 15
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -29,33 +91,64 @@ spec:
       containers:
         - name: prometheus
           image: prom/prometheus:v2.53.0
+          imagePullPolicy: IfNotPresent
           args:
             - "--config.file=/etc/prometheus/prometheus.yml"
             - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=2h"
             - "--web.enable-lifecycle"
           ports:
             - name: http
               containerPort: 9090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: "100m"
+              memory: "128Mi"
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: "500m"
+              memory: "512Mi"
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true
             capabilities:
-              drop:
-                - ALL
+              drop: ["ALL"]
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: config
           configMap:
             name: prometheus-config
+            defaultMode: 0440
+        - name: data
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
 ---
 apiVersion: v1
 kind: Service
@@ -64,19 +157,26 @@ metadata:
   namespace: private-relay
   labels:
     app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: prometheus
 spec:
+  type: ClusterIP
   selector:
     app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: prometheus
   ports:
     - name: http
       port: 9090
-      targetPort: 9090
+      targetPort: http
+      protocol: TCP
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: prometheus-config
   namespace: private-relay
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: prometheus
 data:
   prometheus.yml: |
     global:
@@ -85,10 +185,10 @@ data:
     scrape_configs:
       - job_name: "private-relay-entry"
         static_configs:
-          - targets: ["relay-entry:9091"]
+          - targets: ["private-relay-entry-metrics.private-relay.svc.cluster.local:9091"]
       - job_name: "private-relay-middle"
         static_configs:
-          - targets: ["relay-middle:9091"]
+          - targets: ["private-relay-middle-metrics.private-relay.svc.cluster.local:9091"]
       - job_name: "private-relay-exit"
         static_configs:
-          - targets: ["relay-exit:9091"]
+          - targets: ["private-relay-exit-metrics.private-relay.svc.cluster.local:9091"]

@@ -2,8 +2,8 @@
 
 A research-oriented, 3-hop privacy-preserving relay overlay (`Client → Entry → Middle → Exit → Destination`) engineered in Rust with Noise Protocol handshakes and per-hop authenticated encryption.
 
-> **Current Phase:** **Day 6 Complete (Offline Scope) — `Private-Relay v0.1` Multi-Process, Docker Compose & Hardened Kubernetes Kustomize Manifests Ready (`42/42` Rust tests + Docker E2E verified; Live Cluster Deployment `NOT VERIFIED`)**  
-> **Code Status:** Standalone CLIs (`relay-entry`, `relay-middle`, `relay-exit`, `relay-client` with `--probe`/`--probe-noise`/`--probe-http`, `demo-dest`, `relay-keygen` with `--split-dirs`/`--key-file-path`), hardened multi-stage [Dockerfile](./Dockerfile) & [docker-compose.yml](./docker-compose.yml), hardened Kubernetes Kustomize manifests ([k8s/](./k8s/README.md)), coordinated `Noise_IK` link rekeying (`D-09`), hardened SSRF (`D4-01`), and verification reports ([SECURITY_REVIEW.md](./SECURITY_REVIEW.md), [DAY4_VERIFICATION_REPORT.md](./DAY4_VERIFICATION_REPORT.md), [docs/DAY_5_DOCKER_REPORT.md](./docs/DAY_5_DOCKER_REPORT.md), [docs/DAY_6_KUBERNETES_REPORT.md](./docs/DAY_6_KUBERNETES_REPORT.md)) complete. **Research prototype only — not externally audited or production-ready.**
+> **Current Phase:** **Days 8–10 Complete — Live `kind` (`v1.32.2`) + Calico (`v3.29.1`) Kubernetes Deployment, Failure-Injection Resilience, & Privacy-Preserving Prometheus/Grafana Observability (`54/54` Rust tests, `12/12` Docker Compose E2E, `12/12` K8s Multi-Hop Traffic, `15/15` Live Calico NetworkPolicy Probes)**  
+> **Code Status:** Standalone CLIs (`relay-entry`, `relay-middle`, `relay-exit` with `--metrics-addr`, `relay-client` with `--probe`/`--probe-noise`/`--probe-http`, `demo-dest`, `relay-keygen` with `--split-dirs`/`--key-file-path`), hardened multi-stage [Dockerfile](./Dockerfile) & [docker-compose.yml](./docker-compose.yml), hardened Kubernetes Kustomize + Prometheus/Grafana manifests ([k8s/](./k8s/README.md)), coordinated `Noise_IK` link rekeying (`D-09`), Day 7 security audit (`SEC-701`–`SEC-709`), live Calico `NetworkPolicy` enforcement, resilience suite, and Days 8–10 verification reports ([docs/DAY_8_DEPLOYMENT_REPORT.md](./docs/DAY_8_DEPLOYMENT_REPORT.md), [docs/DAY_9_RESILIENCE_REPORT.md](./docs/DAY_9_RESILIENCE_REPORT.md), [docs/DAY_10_OBSERVABILITY_REPORT.md](./docs/DAY_10_OBSERVABILITY_REPORT.md), [docs/DAY_8_10_INTEGRATED_REPORT.md](./docs/DAY_8_10_INTEGRATED_REPORT.md)) complete. **Research prototype only — not externally audited or production-ready.**
 
 ---
 
@@ -37,7 +37,12 @@ See [demo/README.md](./demo/README.md) for manual Docker Compose commands, manua
 - [SECURITY_REVIEW.md](./SECURITY_REVIEW.md) — Classified Day 3 internal security review (`Critical`/`High`/`Medium`/`Low`/`Informational`, 16-point inspection, limitations, and external audit gates).
 - [DAY4_VERIFICATION_REPORT.md](./DAY4_VERIFICATION_REPORT.md) — Independent Day 4 engineering audit report (protocol trace, `D4-01`/`D4-02` remediations, live demo PID leak check, & offline dependency/license verification).
 - [docs/DAY_5_DOCKER_REPORT.md](./docs/DAY_5_DOCKER_REPORT.md) — Day 5 multi-stage Docker build, Compose topology, health checks, security audit, and 12-scenario containerized E2E results.
-- [docs/DAY_6_KUBERNETES_REPORT.md](./docs/DAY_6_KUBERNETES_REPORT.md) — Day 6 hardened Kubernetes manifests, Secret-file separation, real `--probe-noise` / `--probe-http` checks, Kustomize verification, and honest `NOT VERIFIED` live-cluster status.
+- [docs/DAY_6_KUBERNETES_REPORT.md](./docs/DAY_6_KUBERNETES_REPORT.md) — Day 6 hardened Kubernetes manifests, Secret-file separation, real `--probe-noise` / `--probe-http` checks, and Kustomize baseline.
+- [docs/DAY_7_SECURITY_AUDIT.md](./docs/DAY_7_SECURITY_AUDIT.md) — Day 7 independent security & reliability audit (`SEC-701`–`SEC-709`).
+- [docs/DAY_8_DEPLOYMENT_REPORT.md](./docs/DAY_8_DEPLOYMENT_REPORT.md) — Day 8 live `kind` + Calico Kubernetes deployment, `12/12` in-cluster traffic tests, & `15/15` live `NetworkPolicy` enforcement proofs.
+- [docs/DAY_9_RESILIENCE_REPORT.md](./docs/DAY_9_RESILIENCE_REPORT.md) — Day 9 live relay restart recovery, fail-closed checks, mid-flight `SIGTERM` drain, `1..25` concurrency, & Pod cgroup memory stats.
+- [docs/DAY_10_OBSERVABILITY_REPORT.md](./docs/DAY_10_OBSERVABILITY_REPORT.md) — Day 10 zero-PII Prometheus exporter, scrape target health, live TSDB deltas, & 10-panel Grafana verification.
+- [docs/DAY_8_10_INTEGRATED_REPORT.md](./docs/DAY_8_10_INTEGRATED_REPORT.md) — Consolidated Days 8–10 engineering sprint summary.
 - [THREAT_MODEL.md](./THREAT_MODEL.md) — Analysis of 9 threat categories + verification tests.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Trust boundaries, RAM state tables, and 6 Mermaid diagrams (architecture, trust zones, circuit build, request flow, response flow, failure teardown).
 
@@ -49,5 +54,5 @@ See [demo/README.md](./demo/README.md) for manual Docker Compose commands, manua
 - [DECISIONS.md](./DECISIONS.md) — Architectural decision log (`D-01`..`D-09`).
 - [ROADMAP.md](./ROADMAP.md) — Phase 1–12 roadmap and capability status matrix.
 - [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) — Open limitations, correlation risks, and SSRF/TOCTOU/audit notes.
-- [TEST_RESULTS.md](./TEST_RESULTS.md) — Verified environment checks, `40/40` workspace test results, and live 5-process demo run metrics.
+- [TEST_RESULTS.md](./TEST_RESULTS.md) — Verified environment checks, `54/54` workspace test results, `12/12` Docker Compose E2E, live `kind`/Calico/Prometheus/Grafana checks, and OS demo metrics.
 - [CHANGELOG.md](./CHANGELOG.md) — Chronological record of specifications and releases.

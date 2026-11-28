@@ -36,10 +36,13 @@ spec:
           image: private-relay:v0.1
           imagePullPolicy: IfNotPresent
           command: ["/usr/local/bin/relay-exit"]
-          args: ["--config", "/cfg/exit.toml", "--log-level", "info"]
+          args: ["--config", "/cfg/exit.toml", "--metrics-addr", "0.0.0.0:9091", "--log-level", "info"]
           ports:
             - name: relay-exit
               containerPort: 9103
+              protocol: TCP
+            - name: metrics
+              containerPort: 9091
               protocol: TCP
           startupProbe:
             exec:
@@ -67,7 +70,8 @@ spec:
             failureThreshold: 3
           livenessProbe:
             exec:
-              command: ["/usr/local/bin/relay-client", "--probe", "127.0.0.1:9103"]
+              command:
+                ["/usr/local/bin/relay-client", "--probe", "127.0.0.1:9103"]
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 3

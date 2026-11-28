@@ -123,6 +123,7 @@ pub fn init_cli_logger(level_override: Option<LogLevel>) {
 pub struct RelayCliArgs {
     pub config_path: PathBuf,
     pub listen_override: Option<String>,
+    pub metrics_addr_override: Option<String>,
     pub log_level: Option<LogLevel>,
     pub check_only: bool,
     pub show_help: bool,
@@ -132,6 +133,7 @@ pub struct RelayCliArgs {
 pub fn parse_relay_args(bin_name: &str, args: &[String]) -> Result<RelayCliArgs, String> {
     let mut config_path: Option<PathBuf> = None;
     let mut listen_override: Option<String> = None;
+    let mut metrics_addr_override: Option<String> = None;
     let mut log_level: Option<LogLevel> = None;
     let mut check_only = false;
     let mut i = 0;
@@ -142,6 +144,7 @@ pub fn parse_relay_args(bin_name: &str, args: &[String]) -> Result<RelayCliArgs,
                 return Ok(RelayCliArgs {
                     config_path: PathBuf::new(),
                     listen_override,
+                    metrics_addr_override,
                     log_level,
                     check_only,
                     show_help: true,
@@ -160,6 +163,13 @@ pub fn parse_relay_args(bin_name: &str, args: &[String]) -> Result<RelayCliArgs,
                     .get(i)
                     .ok_or_else(|| format!("{bin_name}: --listen requires ip:port"))?;
                 listen_override = Some(val.clone());
+            }
+            "--metrics-addr" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or_else(|| format!("{bin_name}: --metrics-addr requires ip:port"))?;
+                metrics_addr_override = Some(val.clone());
             }
             "--log-level" => {
                 i += 1;
@@ -185,6 +195,7 @@ pub fn parse_relay_args(bin_name: &str, args: &[String]) -> Result<RelayCliArgs,
     Ok(RelayCliArgs {
         config_path,
         listen_override,
+        metrics_addr_override,
         log_level,
         check_only,
         show_help: false,
@@ -233,7 +244,7 @@ pub async fn run_relay_cli(expected_role: RelayRole, bin_name: &str, args: &[Str
 
     if parsed.show_help {
         println!(
-            "Usage: {bin_name} --config <FILE> [--listen <IP:PORT>] [--log-level error|warn|info|debug] [--check-only]"
+            "Usage: {bin_name} --config <FILE> [--listen <IP:PORT>] [--metrics-addr <IP:PORT>] [--log-level error|warn|info|debug] [--check-only]"
         );
         return ExitCode::SUCCESS;
     }
@@ -263,6 +274,14 @@ pub async fn run_relay_cli(expected_role: RelayRole, bin_name: &str, args: &[Str
         cfg.listen_addr = listen;
         if let Err(e) = cfg.validate() {
             eprintln!("error: invalid --listen override: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    if let Some(metrics_addr) = parsed.metrics_addr_override {
+        cfg.metrics_addr = Some(metrics_addr);
+        if let Err(e) = cfg.validate() {
+            eprintln!("error: invalid --metrics-addr override: {e}");
             return ExitCode::FAILURE;
         }
     }

@@ -1,83 +1,81 @@
-# DAY 10 — OBSERVABILITY, PROMETHEUS & GRAFANA INTEGRATION REPORT
+# DAY 10 — PRIVACY-PRESERVING OBSERVABILITY, PROMETHEUS & GRAFANA REPORT
 
-**Date:** 2026-11-27  
-**Auditor / Observability Architect:** Principal Observability Architect (Antigravity IDE)  
-**Repository:** `adityasystems99/VEXREACH`  
-**Working Directory:** `private-relay/`  
-**Milestone:** Day 10 — Privacy-Preserving Observability, Prometheus Exporter & Grafana Dashboards  
+**Date:** 2026-11-28  
+**Engineer:** Principal Observability & Security Architect  
+**Repository:** `adityasystems99/VEXREACH` (`private-relay/`, branch `master`)  
+**Cluster Environment:** `kind` `v1.32.2` + Calico `v3.29.1` (`Prometheus v2.53.0` + `Grafana 11.1.0`)  
 
 ---
 
 ## 1. Executive Summary
 
-Day 10 establishes operational visibility across the Private Relay network without compromising cryptographic privacy or user anonymity.
+Day 10 implemented a zero-dependency, privacy-preserving Prometheus exposition endpoint directly in the Private Relay runtime (`crates/network/src/metrics.rs`, `crates/relay/src/engine.rs`, `--metrics-addr` CLI flag), isolated Kubernetes scrape Services + Calico `NetworkPolicy` locks (`k8s/observability-prometheus.yaml`), and a provisioned 10-panel Grafana dashboard (`k8s/observability-grafana.yaml`).
 
-Key outcomes:
-1. **Lightweight Native Prometheus Exporter:** Implemented `RelayMetrics` inside `crates/network/src/metrics.rs` exposing standard Prometheus text format (`text/plain; version=0.0.4`) over an optional HTTP listener (`metrics_addr = "0.0.0.0:9091"`).
-2. **Zero Privacy Leakage:** Strictly enforces low-cardinality, bounded labels (`role="entry|middle|exit"`, `node="<id>"`).
-   - **NEVER** includes IP addresses, hostnames, URLs, RequestIDs, CircuitIDs, user identities, or payload contents in metric labels.
-3. **Observability Manifests:** Authored Kubernetes configurations:
-   - `k8s/observability-prometheus.yaml`: Prometheus deployment, Service, and ConfigMap scraping `relay-entry:9091`, `relay-middle:9091`, and `relay-exit:9091`.
-   - `k8s/observability-grafana.yaml`: Grafana deployment, Service, automated datasource provisioning, and a pre-configured dashboard displaying active circuits, link connections, frame rates, request rates, error rates, and SSRF blocks.
-4. **Comprehensive Automated Verification:** Verified with a dedicated unit test (`crates/relay/tests/metrics_tests.rs::metrics_endpoint_exposes_prometheus_text_format`) asserting accurate counter and gauge exposition.
+Live cluster verification confirmed:
+- All **3 relay scrape targets** (`private-relay-entry`, `private-relay-middle`, `private-relay-exit`) are `up` (`5.78ms–6.09ms` scrape duration).
+- Real multi-hop traffic produced **measured live deltas** inside Prometheus TSDB (`requests_total: 41 -> 44`, `ssrf_denials_total: 1 -> 2`, `bytes_sent_total: 393600 -> 422400`).
+- **Prometheus Label Privacy Audit** confirmed strictly bounded labels (`__name__, instance, job, le, node, role`) — zero IPs, hostnames, URLs, `CircuitId`s, `RequestId`s, or payloads.
+- **Grafana `11.1.0`** (`database=ok`) connected to `Prometheus` (`uid=prometheus`), executed live datasource proxy queries (`sum(private_relay_up) = 3`), and loaded the 10-panel dashboard (`uid=private-relay-v01`).
 
 ---
 
-## 2. Metrics Catalog & Schema
+## 2. Prometheus Exporter Implementation & Privacy Contract
 
-All metrics follow standard Prometheus nomenclature:
+- **Rust Implementation:**
+  - `RelayMetrics` (`crates/network/src/metrics.rs`) renders Prometheus text format `0.0.4`.
+  - Bounded `/metrics` HTTP endpoint (`2s` request timeout, `1024B` read limit, `/healthz` health response, `404`/`405` on unknown/non-GET requests) exposed via `--metrics-addr <IP:PORT>` on `relay-entry`, `relay-middle`, and `relay-exit` ([crates/cli/src/lib.rs](../crates/cli/src/lib.rs)).
+  - **Strict Cardinality / Zero-PII Guarantee:** Every metric carries strictly `role ∈ {entry, middle, exit}`, sanitized `node`, and bounded histogram `le` bucket bounds (`0.005s..5s`, `+Inf`). Never emits IPs, URLs, hostnames, IDs, payloads, or key material.
 
-| Metric Name | Type | Description | Privacy Bounds |
-|:---|:---|:---|:---|
-| `private_relay_active_circuits` | Gauge | Current active established onion circuits | Labelled only by `role` and `node` |
-| `private_relay_circuits_created_total` | Counter | Total circuits created since startup | Bounded counter |
-| `private_relay_circuits_destroyed_total` | Counter | Total circuits destroyed | Bounded counter |
-| `private_relay_active_connections` | Gauge | Active inbound/outbound TCP Noise links | Bounded counter |
-| `private_relay_connections_accepted_total` | Counter | Total TCP Noise links accepted | Bounded counter |
-| `private_relay_connections_rejected_total` | Counter | Inbound links dropped due to capacity limits | Bounded counter |
-| `private_relay_bytes_received_total` | Counter | Total wire frame bytes received | Bounded counter |
-| `private_relay_bytes_sent_total` | Counter | Total wire frame bytes sent | Bounded counter |
-| `private_relay_frames_received_total` | Counter | Total 600-byte wire frames received | Bounded counter |
-| `private_relay_frames_sent_total` | Counter | Total 600-byte wire frames sent | Bounded counter |
-| `private_relay_cells_processed_total` | Counter | Total onion cells unpeeled or routed | Bounded counter |
-| `private_relay_requests_total` | Counter | Total destination requests executed (Exit) | Bounded counter |
-| `private_relay_requests_success_total` | Counter | Successful destination responses | Bounded counter |
-| `private_relay_requests_failed_total` | Counter | Failed destination responses | Bounded counter |
-| `private_relay_ssrf_denials_total` | Counter | SSRF destination policy blocks | Bounded counter |
-| `private_relay_timeouts_total` | Counter | Destination I/O and link timeouts | Bounded counter |
-| `private_relay_payload_too_large_total` | Counter | Oversized payload rejections | Bounded counter |
-| `private_relay_protocol_violations_total` | Counter | Framing or protocol violation drops | Bounded counter |
-| `private_relay_link_rekeys_total` | Counter | Noise transport rekey events | Bounded counter |
+### Metrics Actually Collected & Verified Live in Kubernetes Prometheus TSDB
 
----
+| Metric Family | Live Value Observed (`sum`) | Meaning |
+|---|---|---|
+| `private_relay_up` | `3` | All 3 relays healthy (`1` each) |
+| `private_relay_active_circuits` | `0` | Active circuits returned to `0` after tests |
+| `private_relay_circuits_created_total` | `131` | Total circuit hops created across Entry/Middle/Exit |
+| `private_relay_circuits_destroyed_total` | `131` | Equal to created -> zero leaked circuits |
+| `private_relay_hop_handshakes_total` | `217` | Verified `Noise_NK` `Created` completions |
+| `private_relay_connections_accepted_total` | `167` | Inbound `Noise_IK` links accepted |
+| `private_relay_bytes_received_total` | `449400` (`749` frames) | Uniform `600B` link frames received |
+| `private_relay_bytes_sent_total` | `422400` (`704` frames) | Uniform `600B` link frames transmitted |
+| `private_relay_cells_processed_total` | `749` | Onion cells peeled/forwarded |
+| `private_relay_requests_total` | `44` | Destination requests executed by Exit |
+| `private_relay_requests_success_total` | `41` | Successful Exit responses |
+| `private_relay_requests_failed_total` | `2` | Failed requests |
+| `private_relay_ssrf_denials_total` | `2` | Exit SSRF blocks (`PolicyDenied`) |
+| `private_relay_request_duration_seconds_count` | `43` | Observed Exit latency histogram count |
+| `private_relay_request_duration_seconds_sum` | `0.391054` s | Cumulative Exit destination duration (`~9.1 ms` avg) |
 
-## 3. Grafana Dashboard Panels
-
-The provisioned Grafana dashboard (`private-relay.json`) includes 6 core operational panels:
-1. **Active Circuits (Stat):** Instantaneous gauge of current active circuits across the cluster.
-2. **Active TCP Links (Stat):** Total active Noise transport sessions.
-3. **Total Requests (Stat):** Aggregate requests processed by the relay fleet.
-4. **SSRF Policy Denials (Stat):** Security gauge monitoring blocked exfiltration attempts.
-5. **Traffic Volume (Time Series):** Real-time inbound and outbound frame rates by role.
-6. **Request & Error Rate (Time Series):** Request success rate, failure rate, and timeout rate.
+*(Additional instrumented counters verified in automated tests: `private_relay_timeouts_total`, `private_relay_payload_too_large_total`, `private_relay_protocol_violations_total`, `private_relay_destination_connect_failures_total`, `private_relay_connections_rejected_total`, `private_relay_hop_handshake_failures_total`, `private_relay_link_rekeys_total`, `private_relay_process_uptime_seconds`, `private_relay_max_circuits`, `private_relay_max_connections`.)*
 
 ---
 
-## 4. Verification Evidence
+## 3. Kubernetes Scrape Discovery & Network Isolation
 
-- Dedicated test executed: `cargo test --offline --test metrics_tests` -> **PASSED** (1/1).
-- Prometheus exposition format verified:
-  ```http
-  HTTP/1.1 200 OK
-  Content-Type: text/plain; version=0.0.4; charset=utf-8
-  Content-Length: 2021
-  Connection: close
+- **Services:** Dedicated ClusterIP Services `private-relay-entry-metrics:9091`, `private-relay-middle-metrics:9091`, and `private-relay-exit-metrics:9091` prevent exposing metrics ports on the primary relay data services (`9101`/`9102`/`9103`).
+- **Calico `NetworkPolicy` Locks (`k8s/network-policy.yaml`):**
+  - `entry-relay-policy`, `middle-relay-policy`, `exit-relay-policy` permit port `9091` ingress **strictly** from `app.kubernetes.io/component: prometheus` (confirmed earlier when `client -> entry-metrics:9091` was `DENIED`).
+  - `prometheus-policy` permits ingress from `grafana:3000` -> `9090` and egress only to relay metrics `9091` (+ CoreDNS).
+  - `grafana-policy` permits egress only to `prometheus:9090` (+ CoreDNS).
 
-  # HELP private_relay_circuits_created_total Total circuits created
-  # TYPE private_relay_circuits_created_total counter
-  private_relay_circuits_created_total{role="entry",node="entry-metrics-test"} 1
-  # HELP private_relay_active_circuits Current active circuits
-  # TYPE private_relay_active_circuits gauge
-  private_relay_active_circuits{role="entry",node="entry-metrics-test"} 1
-  ...
-  ```
+---
+
+## 4. Grafana Provisioning & Dashboard Verification
+
+- **Deployment & PSS Restricted Hardening:** `grafana/grafana:11.1.0` (`runAsUser: 472`, `readOnlyRootFilesystem: true`, `emptyDir` mounts for `/var/lib/grafana` and `/tmp`, provisioned files under `/etc/grafana/provisioning/*` and `/etc/grafana/dashboards`).
+- **10 Dashboard Panels Verified (`uid: private-relay-v01`):**
+  1. Relay Health (Up)
+  2. Active Circuits
+  3. Rejected SSRF Requests
+  4. Relay Restarts & Uptime (seconds)
+  5. Request Rate (req/s)
+  6. Error Rate (err/s)
+  7. Timeout Rate (timeouts/s)
+  8. Traffic Volume (Bytes/sec)
+  9. Resource Consumption (Links & Circuits)
+  10. Exit Request Latency (p50 & p95 seconds histogram quantile)
+- **Live Verification Evidence:**
+  - `/api/health`: `database=ok`, `version=11.1.0`.
+  - `/api/datasources`: `Prometheus (prometheus uid=prometheus)`.
+  - `/api/datasources/proxy/uid/prometheus/api/v1/query?query=sum(private_relay_up)` -> `3`.
+  - `/api/dashboards/uid/private-relay-v01` -> `title='Private Relay v0.1 - Privacy-Preserving Operations'`, `panels=10`.

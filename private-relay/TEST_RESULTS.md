@@ -128,10 +128,24 @@
 
 ---
 
-## 6. Deferred Post-`v0.1` Suites
+## 6. Day 7 Security Audit & Days 8–10 Live Kubernetes, Resilience & Observability (`2026-11-27`–`2026-11-28`)
 
-| Suite | Target Phase | Status | Notes |
+| Command / Check | Target | Observed Output | Status |
 | :--- | :--- | :--- | :--- |
-| Live Kubernetes deploy, resilience, & CNI `NetworkPolicy` enforcement | Day 6 Live Gate | **NOT VERIFIED** | Requires an active local/CI cluster (`kind`/`minikube`/Docker Desktop K8s) + policy CNI (Calico/Cilium) |
-| Multi-host WAN soak benchmarks & Prometheus | Phase 7–8 | **Not Yet Executed / Deferred** | Prometheus & LLM integration remain out of scope |
-| Fuzzing (`cargo-fuzz`), `cargo-audit` & third-party security audit | Pre-Production | **Not Yet Executed** | `cargo-audit`/`cargo-deny` absent offline; required before any non-research deployment |
+| `cargo fmt --all -- --check` | Full 6-crate workspace | Exit `0` (clean) | **Passed** |
+| `cargo clippy --offline --workspace --all-targets -- -D warnings` | Full 6-crate workspace + 6 binaries | Finished dev profile (`0` warnings, exit `0`) | **Passed** |
+| `cargo test --offline --workspace` | All 6 workspace crates | **`54 passed; 0 failed; 0 ignored`** (`protocol 10`, `crypto 6`, `network 7`, `relay 10` incl. `metrics_tests`, `client 16` incl. `resilience_tests`, `cli 5`) | **Passed** |
+| `docker compose build` + `.\demo\run-docker-demo.ps1 -SkipBuild` | Rebuilt `private-relay:v0.1` + 5-container Compose topology | **`12/12` container E2E scenarios passed**, `circuit_hops=12` per relay, clean `SIGTERM` teardown | **Passed** |
+| `kubectl apply -k k8s/` (`kind` `v1.32.2` + `Calico` `v3.29.1`) | Live Kubernetes cluster (`private-relay` namespace, PSS `restricted`) | `39` objects applied; `6/6` Deployments `1/1 Available`, `2/2` Jobs `Complete`, zero inline private keys in ConfigMaps/env | **Passed** |
+| Live K8s Multi-Hop Traffic Suite (`private-relay-test-client`) | `Client Pod -> Entry -> Middle -> Exit -> Destination` | **`12/12` scenarios passed** (`0B`, `/health`, `/medium`, `65536B`, `/max-64kib`, `/redirect-ssrf`, `65537B` reject, `10.0.0.1` / `127.0.0.1` / `169.254.169.254` SSRF, `/oversized`, `/slow` `5012ms`) | **Passed** |
+| Live Calico `NetworkPolicy` Enforcement Probes | `10` Calico-enforced policies across Pods (`--probe`) | **`15/15` probes matched policy** (strict hop-only & Prometheus-only allow; all cross-hop bypasses, client->metrics, dest->entry, and `1.1.1.1:80` denied) | **Passed** |
+| Live K8s Restarts, Outage, `SIGTERM` & Concurrency Ramp | Pod deletion + `replicas=0` + mid-flight `/slow` `SIGTERM` + `1/5/10/25` | Restarts recovered in `4.31s–4.71s`; `replicas=0` failed closed; mid-flight `SIGTERM` delivered `CIRCUIT_DESTROYED(Normal)` (`491ms`); concurrency `1/5/10` (`100%` ok), `25` bounded at single-IP `17` ok / `8` DoS-capped; `0` restarts & `2.11–2.89 MiB` relay cgroup RAM | **Passed** |
+| Live Prometheus (`v2.53.0`) & Grafana (`11.1.0`) | `/api/v1/targets`, `/api/v1/labels`, deltas, proxy query & dashboard | All `3/3` targets `up` (`~6ms`); strictly bounded labels (`__name__, instance, job, le, node, role`); real traffic incremented `requests_total 41->44`, `ssrf_denials 1->2`, `bytes_sent 393600->422400`; Grafana `sum(private_relay_up)=3` & 10-panel dashboard verified | **Passed** |
+
+### Days 7–10 Reports & Remaining Deferred Gates
+
+| Scope | Status | Notes |
+| :--- | :--- | :--- |
+| Audit, Deployment, Resilience & Observability Reports | **Complete** | [docs/DAY_7_SECURITY_AUDIT.md](./docs/DAY_7_SECURITY_AUDIT.md), [docs/DAY_8_DEPLOYMENT_REPORT.md](./docs/DAY_8_DEPLOYMENT_REPORT.md), [docs/DAY_9_RESILIENCE_REPORT.md](./docs/DAY_9_RESILIENCE_REPORT.md), [docs/DAY_10_OBSERVABILITY_REPORT.md](./docs/DAY_10_OBSERVABILITY_REPORT.md), [docs/DAY_8_10_INTEGRATED_REPORT.md](./docs/DAY_8_10_INTEGRATED_REPORT.md) |
+| Multi-host WAN soak benchmarks & Coordinator Discovery | **Deferred (`Phase 11+`)** | Single-replica per-Pod relay architecture per `KI-10` |
+| Fuzzing (`cargo-fuzz`), `cargo-audit` & third-party security audit | **NOT VERIFIED** | `cargo-audit`/`cargo-deny` absent offline; required before any non-research deployment |

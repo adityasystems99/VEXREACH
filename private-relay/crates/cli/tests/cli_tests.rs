@@ -84,6 +84,8 @@ fn cli_arg_parsing_and_url_validation_unit_checks() {
         "entry.toml".into(),
         "--listen".into(),
         "0.0.0.0:9101".into(),
+        "--metrics-addr".into(),
+        "0.0.0.0:9091".into(),
         "--log-level".into(),
         "debug".into(),
         "--check-only".into(),
@@ -93,6 +95,10 @@ fn cli_arg_parsing_and_url_validation_unit_checks() {
     assert_eq!(
         parsed_relay.listen_override.as_deref(),
         Some("0.0.0.0:9101")
+    );
+    assert_eq!(
+        parsed_relay.metrics_addr_override.as_deref(),
+        Some("0.0.0.0:9091")
     );
     assert_eq!(parsed_relay.log_level, Some(LogLevel::Debug));
     assert!(parsed_relay.check_only);

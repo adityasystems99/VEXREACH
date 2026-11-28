@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use private_relay_crypto::{HopCipherPair, HopHandshakeResponder, StaticKeypair};
 use private_relay_network::{
@@ -303,6 +303,7 @@ impl OutboundLinkHandle {
                                     if writer.send_cell(&cell, io_timeout).await.is_err() {
                                         break;
                                     }
+                                    rt_w.metrics.add_bytes_sent(private_relay_protocol::OUTER_WIRE_FRAME_BYTES as u64);
                                 }
                                 None => break,
                             }
@@ -338,6 +339,8 @@ impl OutboundLinkHandle {
                     recv_res = reader.recv_cell_with_timeouts(idle_ttl, io_timeout) => {
                         match recv_res {
                             Ok(cell) => {
+                                rt_r.metrics.inc_cells_processed();
+                                rt_r.metrics.add_bytes_received(private_relay_protocol::OUTER_WIRE_FRAME_BYTES as u64);
                                 let target = routes
                                     .lock()
                                     .ok()
@@ -453,6 +456,7 @@ pub struct RelayServer;
 /// Control handle for a spawned relay node; dropping does not stop cleanly—call [`RelayHandle::shutdown`].
 pub struct RelayHandle {
     local_addr: SocketAddr,
+    metrics_local_addr: Option<SocketAddr>,
     descriptor: PeerDescriptor,
     runtime: Arc<RelayRuntime>,
     shutdown_tx: watch::Sender<bool>,
@@ -462,6 +466,10 @@ pub struct RelayHandle {
 impl RelayHandle {
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    pub fn metrics_local_addr(&self) -> Option<SocketAddr> {
+        self.metrics_local_addr
     }
 
     pub fn peer_descriptor(&self) -> &PeerDescriptor {
@@ -533,6 +541,10 @@ impl RelayServer {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let metrics = Arc::new(RelayMetrics::new());
+        metrics.set_capacity_limits(
+            effective_config.max_concurrent_circuits,
+            effective_config.max_concurrent_connections,
+        );
         let runtime = Arc::new(RelayRuntime {
             config: effective_config.clone(),
             keypair,
@@ -548,41 +560,66 @@ impl RelayServer {
             metrics: Arc::clone(&metrics),
         });
 
-        if let Some(metrics_addr) = effective_config.metrics_addr.as_deref() {
-            if let Ok(m_listener) = TcpListener::bind(metrics_addr).await {
-                let m_rt = Arc::clone(&runtime);
-                let mut m_sd = shutdown_rx.clone();
-                tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            _ = m_sd.changed() => {
-                                if *m_sd.borrow() {
-                                    break;
-                                }
+        let metrics_local_addr = if let Some(metrics_addr) =
+            effective_config.metrics_addr.as_deref()
+        {
+            let m_listener = TcpListener::bind(metrics_addr).await?;
+            let bound = m_listener.local_addr()?;
+            let m_rt = Arc::clone(&runtime);
+            let mut m_sd = shutdown_rx.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = m_sd.changed() => {
+                            if *m_sd.borrow() {
+                                break;
                             }
-                            accepted = m_listener.accept() => {
-                                if let Ok((mut stream, _)) = accepted {
+                        }
+                        accepted = m_listener.accept() => {
+                            if let Ok((mut stream, _)) = accepted {
+                                let rt_req = Arc::clone(&m_rt);
+                                tokio::spawn(async move {
                                     let mut buf = [0u8; 1024];
-                                    let _ = stream.read(&mut buf).await;
-                                    let role_str = match m_rt.config.role {
-                                        RelayRole::Entry => "entry",
-                                        RelayRole::Middle => "middle",
-                                        RelayRole::Exit => "exit",
+                                    let Ok(Ok(n)) = timeout(Duration::from_secs(2), stream.read(&mut buf)).await else {
+                                        return;
                                     };
-                                    let body = m_rt.metrics.render_prometheus(role_str, &m_rt.config.id);
-                                    let resp = format!(
-                                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                                        body.len(),
-                                        body
-                                    );
-                                    let _ = stream.write_all(resp.as_bytes()).await;
-                                }
+                                    let req_text = String::from_utf8_lossy(&buf[..n]);
+                                    let first_line = req_text.lines().next().unwrap_or("");
+                                    let mut parts = first_line.split_whitespace();
+                                    let method = parts.next().unwrap_or("");
+                                    let raw_path = parts.next().unwrap_or("/");
+                                    let path = raw_path.split('?').next().unwrap_or("/");
+                                    let resp = if method != "GET" {
+                                        "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+                                    } else if path == "/healthz" {
+                                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n".to_owned()
+                                    } else if path == "/metrics" {
+                                        let role_str = match rt_req.config.role {
+                                            RelayRole::Entry => "entry",
+                                            RelayRole::Middle => "middle",
+                                            RelayRole::Exit => "exit",
+                                        };
+                                        let body = rt_req.metrics.render_prometheus(role_str, &rt_req.config.id);
+                                        format!(
+                                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                            body.len(),
+                                            body
+                                        )
+                                    } else {
+                                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+                                    };
+                                    let _ = timeout(Duration::from_secs(2), stream.write_all(resp.as_bytes())).await;
+                                    let _ = stream.shutdown().await;
+                                });
                             }
                         }
                     }
-                });
-            }
-        }
+                }
+            });
+            Some(bound)
+        } else {
+            None
+        };
 
         info!(
             relay_id = %runtime.config.id,
@@ -640,6 +677,7 @@ impl RelayServer {
 
         Ok(RelayHandle {
             local_addr,
+            metrics_local_addr,
             descriptor,
             runtime,
             shutdown_tx,
@@ -695,10 +733,22 @@ async fn spawn_inbound_link_loop(
     let (writer_dead_tx, mut writer_dead_rx) = watch::channel(false);
 
     // Writer drains until all up_tx handles (reader + circuit teardown Destroy senders) drop.
+    let rt_w = Arc::clone(&runtime);
+    let mut last_tx_epoch = 0u64;
     let writer_handle = tokio::spawn(async move {
         while let Some(cell) = up_rx.recv().await {
             if writer.send_cell(&cell, io_timeout).await.is_err() {
                 break;
+            }
+            rt_w.metrics
+                .add_bytes_sent(private_relay_protocol::OUTER_WIRE_FRAME_BYTES as u64);
+            if let Ok((tx_ep, _)) = writer.rekey_epochs() {
+                if tx_ep > last_tx_epoch {
+                    for _ in 0..(tx_ep - last_tx_epoch) {
+                        rt_w.metrics.inc_link_rekeys();
+                    }
+                    last_tx_epoch = tx_ep;
+                }
             }
         }
         let _ = writer.shutdown().await;
@@ -706,7 +756,11 @@ async fn spawn_inbound_link_loop(
     });
 
     let mut shutdown_r = runtime.shutdown_rx.clone();
+    let mut last_rx_epoch = 0u64;
     loop {
+        if *shutdown_r.borrow() {
+            break;
+        }
         tokio::select! {
             _ = shutdown_r.changed() => {
                 if *shutdown_r.borrow() {
@@ -722,7 +776,15 @@ async fn spawn_inbound_link_loop(
                 match recv_res {
                     Ok(cell) => {
                         runtime.metrics.inc_cells_processed();
-                        runtime.metrics.add_bytes_received(600);
+                        runtime.metrics.add_bytes_received(private_relay_protocol::OUTER_WIRE_FRAME_BYTES as u64);
+                        if let Ok((_, rx_ep)) = reader.rekey_epochs() {
+                            if rx_ep > last_rx_epoch {
+                                for _ in 0..(rx_ep - last_rx_epoch) {
+                                    runtime.metrics.inc_link_rekeys();
+                                }
+                                last_rx_epoch = rx_ep;
+                            }
+                        }
                         dispatch_inbound_cell(
                             &runtime,
                             peer_ip,
@@ -737,7 +799,10 @@ async fn spawn_inbound_link_loop(
         }
     }
 
-    notify_routes_disconnected(&routes).await;
+    let exited_on_shutdown = *shutdown_r.borrow();
+    if !exited_on_shutdown {
+        notify_routes_disconnected(&routes).await;
+    }
     drop(up_tx);
     let _ = timeout(io_timeout.min(Duration::from_secs(2)), writer_handle).await;
 }
@@ -787,6 +852,7 @@ async fn dispatch_inbound_cell(
         let (msg2, hop_ciphers) = match responder.process_msg1_and_finish(&cell.body) {
             Ok(pair) => pair,
             Err(_) => {
+                runtime.metrics.inc_hop_handshake_failures();
                 let _ = up_tx
                     .send_timeout(Cell::destroy(cid, DestroyReason::CryptoFail), io_timeout)
                     .await;
@@ -797,6 +863,7 @@ async fn dispatch_inbound_cell(
         let created_cell = match Cell::new(cid, Command::Created, 0, msg2) {
             Ok(c) => c,
             Err(_) => {
+                runtime.metrics.inc_hop_handshake_failures();
                 let _ = up_tx
                     .send_timeout(Cell::destroy(cid, DestroyReason::ProtocolError), io_timeout)
                     .await;
@@ -818,6 +885,7 @@ async fn dispatch_inbound_cell(
             }
             return;
         }
+        runtime.metrics.inc_hop_handshakes();
 
         debug!(
             relay_id = %runtime.config.id,
@@ -910,6 +978,12 @@ async fn run_forwarding_circuit_task(
     tokio::pin!(idle_sleep);
 
     loop {
+        if *shutdown_rx.borrow() {
+            destroy_reason = DestroyReason::Normal;
+            notify_upstream_destroy = true;
+            notify_downstream_destroy = next_hop.is_some();
+            break;
+        }
         if let Some(binding) = next_hop.as_mut() {
             tokio::select! {
                 _ = shutdown_rx.changed() => {
@@ -1209,13 +1283,18 @@ async fn dial_and_create_downstream(
     let create_cell = Cell::new(downstream_cid, Command::Create, 0, dir.handshake_msg1)
         .map_err(|_| DestroyReason::ProtocolError)?;
     if link.send(create_cell, runtime.io_timeout()).await.is_err() {
+        runtime.metrics.inc_hop_handshake_failures();
         return Err(DestroyReason::PeerDisconnected);
     }
 
     let created = match timeout(runtime.handshake_timeout(), downstream_rx.recv()).await {
         Ok(Some(cell)) => cell,
-        Ok(None) => return Err(DestroyReason::PeerDisconnected),
+        Ok(None) => {
+            runtime.metrics.inc_hop_handshake_failures();
+            return Err(DestroyReason::PeerDisconnected);
+        }
         Err(_) => {
+            runtime.metrics.inc_hop_handshake_failures();
             let _ = link
                 .send(
                     Cell::destroy(downstream_cid, DestroyReason::HandshakeTimeout),
@@ -1229,12 +1308,18 @@ async fn dial_and_create_downstream(
     match created.command {
         Command::Created => {}
         Command::Destroy => {
+            runtime.metrics.inc_hop_handshake_failures();
             return Err(created
                 .destroy_reason()
                 .unwrap_or(DestroyReason::PeerDisconnected));
         }
-        _ => return Err(DestroyReason::ProtocolError),
+        _ => {
+            runtime.metrics.inc_hop_handshake_failures();
+            return Err(DestroyReason::ProtocolError);
+        }
     }
+
+    runtime.metrics.inc_hop_handshakes();
 
     reg_guard.armed = false;
     Ok((
@@ -1357,8 +1442,11 @@ async fn run_exit_circuit_task(
     let mut reassembler: Option<MessageReassembler> = None;
     let mut used_request_ids: HashSet<u32> = HashSet::new();
     let mut used_request_order: VecDeque<u32> = VecDeque::new();
-    let mut active_dest_task: Option<(private_relay_protocol::RequestId, PendingDestResponse)> =
-        None;
+    let mut active_dest_task: Option<(
+        private_relay_protocol::RequestId,
+        Instant,
+        PendingDestResponse,
+    )> = None;
     let destroy_reason;
     let mut notify_upstream_destroy = false;
     let mut shutdown_rx = runtime.shutdown_rx.clone();
@@ -1367,8 +1455,14 @@ async fn run_exit_circuit_task(
     tokio::pin!(idle_sleep);
 
     loop {
-        if let Some((active_rid, resp_rx)) = active_dest_task.as_mut() {
+        if *shutdown_rx.borrow() {
+            destroy_reason = DestroyReason::Normal;
+            notify_upstream_destroy = true;
+            break;
+        }
+        if let Some((active_rid, req_started, resp_rx)) = active_dest_task.as_mut() {
             let rid = *active_rid;
+            let started = *req_started;
             tokio::select! {
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
@@ -1384,6 +1478,7 @@ async fn run_exit_circuit_task(
                 }
                 res = resp_rx => {
                     active_dest_task = None;
+                    runtime.metrics.observe_request_duration(started.elapsed());
                     let result = res.unwrap_or(Err(RequestErrorCode::InternalError));
                     match &result {
                         Ok(_) => runtime.metrics.inc_requests_success(),
@@ -1393,6 +1488,9 @@ async fn run_exit_circuit_task(
                                 RequestErrorCode::PolicyDenied => runtime.metrics.inc_ssrf_denied(),
                                 RequestErrorCode::Timeout => runtime.metrics.inc_timeouts(),
                                 RequestErrorCode::PayloadTooLarge => runtime.metrics.inc_payload_too_large(),
+                                RequestErrorCode::ConnectFailed | RequestErrorCode::DnsFailed => {
+                                    runtime.metrics.inc_destination_connect_failures();
+                                }
                                 _ => runtime.metrics.inc_protocol_violations(),
                             }
                         }
@@ -1543,7 +1641,7 @@ async fn run_exit_circuit_task(
                                                 let _ = tx.send(outcome);
                                             });
                                             runtime.metrics.inc_requests();
-                                            active_dest_task = Some((rid, rx));
+                                            active_dest_task = Some((rid, Instant::now(), rx));
                                         }
                                         Err(e) => {
                                             let code = match e {

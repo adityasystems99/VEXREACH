@@ -1,6 +1,6 @@
 # Security Design — Private-Relay Protocol (`v0.1`)
 
-> **Status:** Implemented Prototype (`Day 5 — v0.1`). Standard cryptographic crates compiled and verified across local bare-metal (`40/40` workspace tests) and hardened 5-container Docker Compose E2E (`12/12` scenarios); independent external cryptographic audit has NOT been performed.  
+> **Status:** Implemented Prototype (`Days 8–10 — v0.1`). Standard cryptographic crates verified across local bare-metal (`54/54` workspace tests), hardened 5-container Docker Compose E2E (`12/12`), and live `kind` + Calico CNI Kubernetes deployment (`12/12` traffic, `15/15` live `NetworkPolicy` probes, live Prometheus/Grafana); independent external cryptographic audit has NOT been performed.  
 > **Rule:** Never invent cryptographic algorithms, never log secret key material or PII, and never treat unit tests as equivalent to independent cryptographic review.
 
 ---
@@ -62,18 +62,18 @@ For each hop `i`:
       - **IPv6 Denied (Default):** `::/128`, `::1/128`, `::/96` IPv4-compatible, `::ffff:0:0/96` IPv4-mapped, `::ffff:0:0:0/96` SIIT, `0100::/64`, `64:ff9b::/96` (NAT64), `fe80::/10` (link-local), `fec0::/10` (site-local), `fc00::/7` (ULA), `ff00::/8` (multicast), `2001::/32` (Teredo), `2001:2::/48`, `2001:db8::/32`, `2002::/16` (6to4), plus `%` zone IDs (`D4-01`). *(Test overrides: `allow_loopback_for_test = false`, and `allow_private_targets_for_test = false` strictly gated on non-empty `allowed_targets` for isolated Docker Compose testing — NEVER loosens loopback or `169.254.0.0/16` metadata blocking.)*
 4. **Container & Kubernetes Isolation Boundaries (`Day 5–6` vs. Production):**
    - **Docker Compose (`Day 5`):** Runtime containers (`debian:bookworm-slim`) drop all Linux capabilities (`cap_drop: [ALL]`), enforce `no-new-privileges:true`, `read_only: true`, non-root `UID/GID 10001`, memory/CPU/PID caps, zero embedded keys inside images, and isolated per-node `:ro` config volumes over an `internal: true` Compose bridge network.
-   - **Kubernetes (`Day 6` — Manifests & Local Probes Verified; Live Cluster `NOT VERIFIED`):** Namespace `private-relay` enforces PSS `restricted`, drops all capabilities, mounts `readOnlyRootFilesystem: true`, separates non-sensitive TOML `ConfigMap`s from per-node `Secret` files (`private_key_file = "/run/secrets/private_key_hex"`, mode `0440` with `fsGroup: 10001`), uses real `Noise_IK` (`--probe-noise`) and HTTP `GET /health` (`--probe-http`) readiness probes, and defines default-deny + hop-locked `NetworkPolicy` resources (runtime packet drops depend on a policy-enforcing CNI). Production deployments MUST inject keys from external KMS/Vault/HSM rather than `keygen-job` and set `allow_private_targets_for_test = false`.
+   - **Kubernetes (`Days 6–10` — Live `kind` + Calico `NetworkPolicy` Verified):** Namespace `private-relay` enforces PSS `restricted`, drops all capabilities, mounts `readOnlyRootFilesystem: true`, eliminates `subPath` (`SEC-709`), separates non-sensitive TOML `ConfigMap`s from per-node `Secret` files (`private_key_file = "/run/secrets/private_key_hex"`, mode `0440` with `fsGroup: 10001`), uses real `Noise_IK` (`--probe-noise`) and HTTP `GET /health` (`--probe-http`) readiness probes, exposes metrics only via isolated `*-metrics:9091` ClusterIP services restricted to Prometheus, and enforces default-deny + hop-locked `NetworkPolicy` resources verified under **Calico `v3.29.1`**. Production deployments MUST inject keys from external KMS/Vault/HSM rather than `keygen-job` and set `allow_private_targets_for_test = false`.
 
 ---
 
 ## 5. Logging & Telemetry Privacy Contract
 
-| Data Class | Permitted in Logs (`tracing`)? | Permitted in Metrics (`Phase 9`)? |
+| Data Class | Permitted in Logs (`tracing`)? | Permitted in Metrics (`Day 10 Verified`)? |
 | :--- | :--- | :--- |
 | Raw IP addresses (`Client`, outbound `Destination`) | **NEVER** (redacted in release; omitted in dev by default) | **NEVER** |
 | Destination domain names / ports | **NEVER** | **NEVER** |
 | Cryptographic keys, nonces, plaintext payloads | **NEVER** | **NEVER** |
-| Opaque random `session_tag`, error enum, byte count | Yes (debug/error triage) | Aggregate totals only (no per-circuit labels) |
+| Opaque random `session_tag`, error enum, byte count | Yes (debug/error triage) | Aggregate counters/gauges/latency histogram only (`role`, `node`, `le` labels only; verified in live Prometheus `/api/v1/labels`) |
 
 ---
 

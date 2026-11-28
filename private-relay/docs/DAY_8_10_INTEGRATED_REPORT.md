@@ -1,57 +1,35 @@
-# CONSOLIDATED SPRINT REPORT — DAYS 8, 9 & 10
+# CONSOLIDATED ENGINEERING REPORT — DAYS 8, 9 & 10
 
-**Date:** 2026-11-27  
-**Auditor / Principal Engineer:** Antigravity AI Systems Architect  
-**Project:** Private Relay v0.1  
-**Repository:** `adityasystems99/VEXREACH`  
-**Working Directory:** `private-relay/`  
-**Baseline Commit:** `41280d75644ff42726de3172a751eede0927f798`  
+**Date:** 2026-11-28  
+**Project:** Private Relay v0.1 (`adityasystems99/VEXREACH`, `private-relay/`, branch `master`)  
+**Security Audit Baseline:** `41280d75644ff42726de3172a751eede0927f798` (Day 7)  
+**Classification:** Unaudited Research Prototype — Live Kubernetes, Resilience & Observability Verification  
 
 ---
 
-## 1. Executive Summary
+## 1. Consolidated Milestone Matrix
 
-This consolidated engineering sprint executed Days 8, 9, and 10 as one continuous, autonomous milestone:
-- **Day 8 (Live Infrastructure & Deployment):** Completed offline hardening and validation of 33 Kubernetes manifests, eliminated `subPath` volume mounts, verified Noise authenticated probes and HTTP probes, and validated 10/10 multi-process OS end-to-end traffic scenarios.
-- **Day 9 (Resilience, Failure Injection & Concurrency):** Implemented automated resilience test harnesses covering 25 concurrent client circuits, destination crash recovery, and mid-flight graceful shutdown task draining.
-- **Day 10 (Privacy-Preserving Observability):** Designed and implemented native Prometheus metrics export in `crates/network/src/metrics.rs`, exposed via optional HTTP listener on relays, provisioned Kubernetes Prometheus and Grafana manifests with custom dashboards, and verified metrics exposition with dedicated unit tests.
-
-The entire workspace passed all formatting checks, zero clippy warnings (`-D warnings`), and **52/52 automated Rust tests**.
-
----
-
-## 2. Sprint Milestones Status
-
-| Milestone | Scope | Status | Evidence |
-|:---|:---|:---|:---|
-| **Day 8** | Kubernetes Manifests & Multi-Hop Infrastructure | **VERIFIED OFFLINE** (Live cluster `NOT VERIFIED`) | [docs/DAY_8_DEPLOYMENT_REPORT.md](./docs/DAY_8_DEPLOYMENT_REPORT.md), 33 K8s docs, 10/10 PS demo |
-| **Day 9** | Resilience, Concurrency & Failure Injection | **VERIFIED** | [docs/DAY_9_RESILIENCE_REPORT.md](./docs/DAY_9_RESILIENCE_REPORT.md), `resilience_tests.rs` (3/3 passed) |
-| **Day 10** | Prometheus Exporter & Grafana Dashboards | **VERIFIED** | [docs/DAY_10_OBSERVABILITY_REPORT.md](./docs/DAY_10_OBSERVABILITY_REPORT.md), `metrics_tests.rs` (1/1 passed) |
+| Milestone | Scope | Verification Status | Primary Evidence |
+|---|---|---|---|
+| **Day 8** | Live `kind` (`v1.32.2`) + Calico (`v3.29.1`) deployment, secret separation, 12-case K8s E2E traffic, 15-case CNI `NetworkPolicy` enforcement | **VERIFIED** | [DAY_8_DEPLOYMENT_REPORT.md](./DAY_8_DEPLOYMENT_REPORT.md) |
+| **Day 9** | Entry/Middle/Exit/Dest Pod restarts, `replicas=0` fail-closed outage, mid-flight `SIGTERM` graceful drain, 1/5/10/25 concurrency & cgroup v2 memory | **VERIFIED** | [DAY_9_RESILIENCE_REPORT.md](./DAY_9_RESILIENCE_REPORT.md) |
+| **Day 10** | Native Prometheus exporter (`RelayMetrics`, `--metrics-addr`), dedicated scrape services, live TSDB deltas, privacy label audit, 10-panel Grafana dashboard | **VERIFIED** | [DAY_10_OBSERVABILITY_REPORT.md](./DAY_10_OBSERVABILITY_REPORT.md) |
+| **Workspace & Containers** | `cargo fmt --check`, `cargo clippy -D warnings`, **54/54** Rust tests, rebuilt `private-relay:v0.1` + **12/12** Docker Compose E2E | **VERIFIED** | [TEST_RESULTS.md](../TEST_RESULTS.md) |
+| **Static CVE / Fuzzing / Prod Audit** | `cargo-audit` / `cargo-deny` (absent offline), `cargo-fuzz`, third-party cryptographic audit | **NOT VERIFIED** | Tracked in [KNOWN_ISSUES.md](../KNOWN_ISSUES.md) (`KI-09`) |
 
 ---
 
-## 3. Test Suite Verification Summary
+## 2. Architecture & Security Controls Proven in Live Execution
 
-```
-cargo test --offline --workspace
-```
-- **Total Tests:** 52 passed, 0 failed, 0 ignored.
-  - `private_relay_protocol`: 10 passed
-  - `private_relay_crypto`: 6 passed
-  - `private_relay_network`: 7 passed
-  - `private_relay_relay`: 10 passed (including `metrics_tests` and `outbound_link_demuxer`)
-  - `private_relay_client`: 14 passed (including `resilience_tests` and `integration_tests`)
-  - `private_relay_cli`: 5 passed
+1. **Zero Secret Material in ConfigMaps, Env, or Client:** `private-relay-keygen` writes private keys strictly to per-relay Secrets mounted under `/run/secrets/private_key_hex` without `subPath`, running under PSS `restricted` (`UID 10001`, read-only rootfs).
+2. **Real Calico L3/L4 `NetworkPolicy` Enforcement:** Verified live that Client -> Entry (`9101`), Entry -> Middle (`9102`), Middle -> Exit (`9103`), Exit -> Destination (`9000`), and Prometheus -> `*-metrics:9091` are `ALLOWED`, while all bypass paths, client-to-metrics probes, reverse directions, destination egress, and external `1.1.1.1:80` egress are `DENIED`.
+3. **Graceful Drain & DoS Bounds:** Mid-flight `SIGTERM` on Middle returned clean `CIRCUIT_DESTROYED(Normal)` (`491ms`), and `25` simultaneous client requests from one Pod IP hit Entry's `max_circuits_per_peer_ip=16` cap cleanly (`17` ok, `8` rejected cleanly with `[WARN]`, `0` restarts).
+4. **Zero-PII Telemetry:** Prometheus exposes strictly low-cardinality bounded labels (`role`, `node`, histogram `le`) and recorded live request/SSRF/byte/latency deltas across real multi-hop cluster traffic.
 
 ---
 
-## 4. Honest Environment Disclosures & Blockers
+## 3. Remaining Prototype Limits
 
-1. **Host Docker Daemon Offline:**
-   - Docker Desktop's named pipe (`//./pipe/dockerDesktopLinuxEngine`) was unavailable on the Windows host.
-   - The `kind` CLI binary (`v0.27.0`) was successfully acquired and verified in `C:\Users\KIIT\bin\kind.exe`. However, cluster creation requires an active Docker daemon.
-   - Manifests are verified offline; live cluster execution remains `NOT VERIFIED`.
-2. **CNI NetworkPolicy Enforcement:**
-   - Standard kind clusters use `kindnet`, which does not enforce NetworkPolicies without Calico or Cilium. Live NetworkPolicy tests remain `NOT VERIFIED`.
-3. **Anonymity Guarantees:**
-   - Private Relay is an **unaudited research prototype**. It does not protect against dual-ended global passive adversaries.
+- **Single-Replica Relay Constraint (`KI-10`):** Horizontal scaling requires Coordinator discovery and per-Pod identities (`Phase 11+`).
+- **Dual-Ended Passive Traffic Correlation (`KI-01`):** Constant `600B` Noise framing prevents single-cell size leaks, not global flow/timing correlation.
+- **No Claim of Production Security (`KI-09`):** Remains an engineering research prototype until formal external cryptographic audit, fuzzing, and CVE scanning complete.

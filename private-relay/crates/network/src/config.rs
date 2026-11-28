@@ -260,6 +260,13 @@ impl RelayConfig {
                 "listen_addr must be a valid ip:port SocketAddr".into(),
             ));
         }
+        if let Some(ref metrics_addr) = self.metrics_addr {
+            if metrics_addr.parse::<SocketAddr>().is_err() {
+                return Err(NetworkError::Config(
+                    "metrics_addr must be a valid ip:port SocketAddr".into(),
+                ));
+            }
+        }
         if self.allow_private_targets_for_test && self.allowed_targets.is_empty() {
             return Err(NetworkError::Config(
                 "allow_private_targets_for_test requires non-empty allowed_targets allowlist"

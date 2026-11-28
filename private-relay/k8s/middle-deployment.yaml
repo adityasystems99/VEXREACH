@@ -35,10 +35,13 @@ spec:
           image: private-relay:v0.1
           imagePullPolicy: IfNotPresent
           command: ["/usr/local/bin/relay-middle"]
-          args: ["--config", "/cfg/middle.toml", "--log-level", "info"]
+          args: ["--config", "/cfg/middle.toml", "--metrics-addr", "0.0.0.0:9091", "--log-level", "info"]
           ports:
             - name: relay-middle
               containerPort: 9102
+              protocol: TCP
+            - name: metrics
+              containerPort: 9091
               protocol: TCP
           startupProbe:
             exec:
@@ -66,7 +69,8 @@ spec:
             failureThreshold: 3
           livenessProbe:
             exec:
-              command: ["/usr/local/bin/relay-client", "--probe", "127.0.0.1:9102"]
+              command:
+                ["/usr/local/bin/relay-client", "--probe", "127.0.0.1:9102"]
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 3
